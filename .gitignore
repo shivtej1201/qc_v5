@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+uploads/
+reports/
+batches/
+artifacts/
+*.xlsx
+.env
