@@ -1,5 +1,6 @@
 import re
 import json
+import html
 from typing import Dict, Any, Optional, List
 
 # List of safe HTTP headers that may be logged for diagnostics without privacy risk
@@ -9,7 +10,8 @@ SAFE_HEADER_KEYS = {
     "retry-after", "vary", "content-type", "content-length", "date",
     "strict-transport-security", "x-frame-options", "x-content-type-options",
     "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset",
-    "x-akamai-transformed", "x-cdn", "x-edge-location", "x-iinfo"
+    "x-akamai-transformed", "x-akam-sw-version", "x-bfl-grn", "x-custom-check",
+    "x-cdn", "x-edge-location", "x-edge-connect", "x-iinfo"
 }
 
 # Forbidden header keys that must NEVER be logged or leaked
@@ -33,7 +35,7 @@ class Diagnostics403:
             k_lower = k.lower().strip()
             if k_lower in FORBIDDEN_HEADER_KEYS:
                 continue
-            if k_lower in SAFE_HEADER_KEYS or k_lower.startswith(("x-cf-", "x-amz-", "x-sucuri-", "cf-")):
+            if k_lower in SAFE_HEADER_KEYS or k_lower.startswith(("x-cf-", "x-amz-", "x-sucuri-", "cf-", "x-akam-", "x-akamai-")):
                 safe[k_lower] = str(v)[:256]
         return safe
 
@@ -43,23 +45,26 @@ class Diagnostics403:
         if not body_snippet:
             return {"challenge_detected": False, "waf_detected": False, "captcha_detected": False}
             
+        unescaped_snippet = html.unescape(body_snippet[:4096]).lower()
         snippet_lower = body_snippet[:4096].lower()
         
-        has_cloudflare = any(term in snippet_lower for term in [
+        has_cloudflare = any(term in snippet_lower or term in unescaped_snippet for term in [
             "cf-browser-verification", "cf-chl-bypass", "challenge-platform", 
             "cloudflare-static", "turnstile", "cf-spinner", "please wait...|cloudflare",
             "checking your browser before accessing", "attention required! | cloudflare"
         ])
         
-        has_aws_waf = any(term in snippet_lower for term in [
+        has_aws_waf = any(term in snippet_lower or term in unescaped_snippet for term in [
             "awswaf", "x-amzn-waf-action", "aws waf"
         ])
         
-        has_akamai = any(term in snippet_lower for term in [
-            "akamai ghost", "reference #", "access denied - akamai", "you don't have permission to access on this server"
+        has_akamai = any(term in snippet_lower or term in unescaped_snippet for term in [
+            "akamai ghost", "reference #", "reference&#", "access denied - akamai",
+            "edgesuite.net", "errors.edgesuite.net", "akamaitechnologies.com",
+            "you don't have permission to access"
         ])
         
-        has_imperva = any(term in snippet_lower for term in [
+        has_imperva = any(term in snippet_lower or term in unescaped_snippet for term in [
             "incapsula", "imperva", "_incident", "incapsula incident id"
         ])
         
@@ -215,20 +220,29 @@ class Diagnostics403:
         # 7. CDN / WAF Blocked or Challenged
         # Evidence required: verified CDN header (cf-ray, server: cloudflare, x-amz-cf-id, etc.) OR body challenge indicator
         server_val = str(safe_headers.get("server", "")).lower()
-        has_cdn_headers = any(k in safe_headers for k in ["cf-ray", "cf-cache-status", "x-amz-cf-id", "x-sucuri-id"]) or any(c in server_val for c in ["cloudflare", "cloudfront", "akamai", "sucuri", "imperva"])
+        has_akamai_headers = any(k in safe_headers for k in ["x-akamai-transformed", "x-akam-sw-version", "x-bfl-grn"]) or any(k.startswith(("x-akam-", "x-akamai-")) for k in safe_headers)
+        has_cdn_headers = (
+            any(k in safe_headers for k in ["cf-ray", "cf-cache-status", "x-amz-cf-id", "x-sucuri-id"])
+            or has_akamai_headers
+            or any(c in server_val for c in ["cloudflare", "cloudfront", "akamai", "sucuri", "imperva"])
+        )
         
         if status_code == 403 and (has_cdn_headers or body_indicators["waf_detected"] or body_indicators["challenge_detected"]):
             waf_name = "Cloudflare" if "cf-ray" in safe_headers or "cloudflare" in server_val or body_indicators.get("cloudflare") else \
                        "AWS CloudFront / WAF" if "x-amz-cf-id" in safe_headers or "cloudfront" in server_val or body_indicators.get("aws_waf") else \
+                       "Akamai" if has_akamai_headers or "akamai" in server_val or body_indicators.get("akamai") else \
                        "Sucuri" if "x-sucuri-id" in safe_headers or body_indicators.get("imperva") else \
-                       "Akamai" if "akamai" in server_val or body_indicators.get("akamai") else \
                        "CDN / Edge WAF"
                        
             is_challenge = body_indicators["challenge_detected"]
             what_happened = f"{waf_name} issued an interactive security challenge (CAPTCHA / JavaScript verification) and blocked automated crawling." if is_challenge else \
                             f"{waf_name} blocked the request due to an edge security rule or bot management policy."
             
-            what_verified = f"Verified edge signature: {waf_name} headers/indicators present ({', '.join(k for k in safe_headers if k in ['cf-ray', 'x-amz-cf-id', 'server'])}). Robots policy allowed."
+            matched_evidence = [k for k in safe_headers if k in ['cf-ray', 'x-amz-cf-id', 'server', 'x-akam-sw-version', 'x-bfl-grn'] or k.startswith(('x-akam-', 'x-akamai-'))]
+            if body_indicators.get("akamai") and "Akamai" in waf_name:
+                matched_evidence.append("Akamai Edge Reference / EdgeSuite signature in response body")
+            evidence_str = f" ({', '.join(matched_evidence)})" if matched_evidence else ""
+            what_verified = f"Verified edge signature: {waf_name} indicators present{evidence_str}. Robots policy allowed."
             
             recommended_action = (
                 f"If you own or administer this website, add an authorized exception in {waf_name} "
@@ -238,7 +252,7 @@ class Diagnostics403:
             
             return {
                 "classification": "CDN_WAF_BLOCKED_OR_CHALLENGED",
-                "evidence_type": "VERIFIED_EVIDENCE" if has_cdn_headers else "INFERRED_CAUSE",
+                "evidence_type": "VERIFIED_EVIDENCE" if (has_cdn_headers or (body_indicators.get("akamai") and "Akamai" in waf_name)) else "INFERRED_CAUSE",
                 "what_happened": what_happened,
                 "where_it_happened": f"During {stage} (HTTP 403 from edge proxy/WAF).",
                 "what_verified": what_verified,

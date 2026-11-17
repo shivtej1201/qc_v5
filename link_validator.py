@@ -48,8 +48,8 @@ class LinkValidator:
         # Long-lived HTTP client with connection pooling
         limits = httpx.Limits(
             max_connections=self.concurrency,
-            max_keepalive_connections=min(self.concurrency, 20),
-            keepalive_expiry=30.0
+            max_keepalive_connections=self.concurrency,
+            keepalive_expiry=60.0
         )
         timeout = httpx.Timeout(
             connect=self.connect_timeout,
@@ -82,6 +82,9 @@ class LinkValidator:
             await self.http_client.aclose()
 
     async def _get_host_semaphore(self, host: str) -> asyncio.Semaphore:
+        sem = self._host_semaphores.get(host)
+        if sem is not None:
+            return sem
         async with self._sem_lock:
             if host not in self._host_semaphores:
                 self._host_semaphores[host] = asyncio.Semaphore(self.per_host_concurrency)
@@ -469,7 +472,8 @@ class LinkValidator:
             nonlocal last_flush_time
             async with flush_lock:
                 now = time.time()
-                if results_buffer and (force or len(results_buffer) >= 15 or (now - last_flush_time) >= 0.5):
+                batch_threshold = max(50, getattr(settings, 'DB_BATCH_SIZE', 500))
+                if results_buffer and (force or len(results_buffer) >= batch_threshold or (now - last_flush_time) >= 0.5):
                     to_flush = list(results_buffer)
                     results_buffer.clear()
                     try:

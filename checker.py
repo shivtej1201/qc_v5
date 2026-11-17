@@ -75,6 +75,7 @@ class URLChecker:
             result.status = result.error_type
             
         result.checked_at = datetime.utcnow().isoformat() + "Z"
+        result.html = None # Immediately release raw HTML body to prevent memory retention at 500k scale
         return result
 
     async def _http_check(self, result: UrlResult) -> bool:

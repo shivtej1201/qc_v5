@@ -42,7 +42,11 @@ class RobotsManager:
 
             parser = urllib.robotparser.RobotFileParser()
             try:
-                resp = await self.http_client.get(robots_url, timeout=5.0)
+                browser_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept": "text/plain,text/html,*/*"
+                }
+                resp = await self.http_client.get(robots_url, headers=browser_headers, timeout=5.0)
                 if resp.status_code == 200:
                     parser.parse(resp.text.splitlines())
                     self.parsers[origin] = parser
@@ -96,7 +100,9 @@ class SitemapExtractor:
         max_urls: int = 50000,
         timeout: float = 15.0,
         concurrency: int = 5,
-        allow_local: bool = False
+        allow_local: bool = False,
+        browser_pool: Optional[Any] = None,
+        use_browser_fallback: bool = True
     ):
         self.max_depth = max_depth
         self.max_response_size = max_response_size
@@ -104,6 +110,9 @@ class SitemapExtractor:
         self.timeout = timeout
         self.concurrency = concurrency
         self.allow_local = allow_local
+        self.browser_pool = browser_pool
+        self.use_browser_fallback = use_browser_fallback
+        self._owned_browser_pool = False
         
         self.client = httpx.AsyncClient(
             verify=False,
@@ -116,6 +125,12 @@ class SitemapExtractor:
 
     async def close(self):
         await self.client.aclose()
+        if self._owned_browser_pool and self.browser_pool:
+            try:
+                await self.browser_pool.stop()
+            except Exception:
+                pass
+            self.browser_pool = None
 
     @staticmethod
     def _safe_parse_xml(content_bytes: bytes, max_nesting_depth: int = 50) -> ET.Element:
@@ -206,6 +221,124 @@ class SitemapExtractor:
             except Exception:
                 raise ValueError(f"Corrupted or truncated gzip stream: {e}")
 
+    async def _fetch_with_browser(self, url: str) -> Tuple[bytes, int, Dict[str, str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """
+        Human-like browser fallback using Playwright Chromium when HTTP client
+        is blocked by edge WAF (e.g. Akamai bot protection).
+        Preserves SSRF protection, redirect tracking, and max size limits.
+        """
+        if not URLNormalizer.is_safe_url(url, allow_local=self.allow_local):
+            diag = Diagnostics403.classify(
+                status_code=403,
+                headers={},
+                stage="sitemap_browser_download",
+                robots_allowed=True,
+                error_type="SSRF_PROHIBITED"
+            )
+            return b"", 403, {}, [], diag
+
+        redirect_chain = []
+        page = None
+        try:
+            if not self.browser_pool or not getattr(self.browser_pool, "context", None):
+                from browser import BrowserPool
+                self.browser_pool = BrowserPool()
+                await self.browser_pool.start()
+                self._owned_browser_pool = True
+
+            page = await self.browser_pool.get_page()
+            if not page:
+                diag = Diagnostics403.classify(
+                    status_code=503,
+                    headers={},
+                    stage="sitemap_browser_download",
+                    error_type="Browser page unavailable"
+                )
+                return b"", 503, {}, [], diag
+
+            def handle_response(response):
+                if response.request.resource_type == "document" and response.status in [301, 302, 303, 307, 308]:
+                    redirect_chain.append({"url": response.url, "status": response.status})
+
+            page.on("response", handle_response)
+
+            try:
+                timeout_ms = int(max(self.timeout, 30.0) * 1000)
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if not response:
+                    diag = Diagnostics403.classify(
+                        status_code=0,
+                        headers={},
+                        stage="sitemap_browser_download",
+                        error_type="No response from browser"
+                    )
+                    return b"", 0, {}, redirect_chain, diag
+
+                status_code = response.status
+                headers = dict(response.headers)
+                body = await response.body()
+
+                # SSRF validation on destination URL after browser redirects
+                if response.url and response.url != url:
+                    if not URLNormalizer.is_safe_url(response.url, allow_local=self.allow_local):
+                        diag = Diagnostics403.classify(
+                            status_code=403,
+                            headers=headers,
+                            stage="sitemap_browser_download",
+                            error_type="SSRF_PROHIBITED"
+                        )
+                        return b"", 403, {}, redirect_chain, diag
+
+                # Check max response size
+                if len(body) > self.max_response_size:
+                    raise ValueError(f"Response size exceeded limit of {self.max_response_size} bytes")
+
+                # If status is 200, check if it's an interactive challenge or clean sitemap
+                if status_code == 200:
+                    body_snippet = body[:4096].decode("utf-8", errors="ignore")
+                    body_indicators = Diagnostics403.inspect_html_body(body_snippet)
+                    if body_indicators.get("challenge_detected"):
+                        diag = Diagnostics403.classify(
+                            status_code=403,
+                            headers=headers,
+                            body_snippet=body_snippet,
+                            stage="sitemap_browser_download",
+                            robots_allowed=True
+                        )
+                        return body, 403, headers, redirect_chain, diag
+
+                    return body, 200, headers, redirect_chain, None
+
+                # Non-200 from browser
+                diag = Diagnostics403.classify(
+                    status_code=status_code,
+                    headers=headers,
+                    body_snippet=body[:2048].decode("utf-8", errors="ignore"),
+                    stage="sitemap_browser_download",
+                    robots_allowed=True,
+                    redirect_chain=redirect_chain
+                )
+                return body, status_code, headers, redirect_chain, diag
+
+            finally:
+                page.remove_listener("response", handle_response)
+
+        except Exception as e:
+            err_str = str(e)
+            diag = Diagnostics403.classify(
+                status_code=0,
+                headers={},
+                stage="sitemap_browser_download",
+                robots_allowed=True,
+                redirect_chain=redirect_chain,
+                error_type="Timeout" if "timeout" in err_str.lower() else "Playwright Error"
+            )
+            diag["what_happened"] = f"Browser fetch failed: {err_str}"
+            return b"", 0, {}, redirect_chain, diag
+        finally:
+            if page and self.browser_pool:
+                self.browser_pool.release_page(page)
+
     async def _safe_fetch(self, url: str) -> Tuple[bytes, int, Dict[str, str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
         Fetch remote URL following redirects with SSRF check on every hop.
@@ -267,6 +400,14 @@ class SitemapExtractor:
                             robots_allowed=True,
                             redirect_chain=redirect_chain
                         )
+                        # Playwright browser fallback when blocked by edge WAF / bot policy
+                        if self.use_browser_fallback and diag.get("classification") in ["CDN_WAF_BLOCKED_OR_CHALLENGED", "HTTP_403_UNCLASSIFIED"]:
+                            b_body, b_status, b_headers, b_chain, b_diag = await self._fetch_with_browser(current_url)
+                            if b_status == 200 and b_body:
+                                return b_body, 200, b_headers, redirect_chain + b_chain, None
+                            elif b_diag and b_status == 403:
+                                return b_body, b_status, b_headers, redirect_chain + b_chain, b_diag
+
                         return body, status, headers, redirect_chain, diag
                     elif status >= 400:
                         diag = Diagnostics403.classify(
@@ -277,6 +418,13 @@ class SitemapExtractor:
                             robots_allowed=True,
                             redirect_chain=redirect_chain
                         )
+                        if self.use_browser_fallback and status in [503] and diag.get("classification") in ["CDN_WAF_BLOCKED_OR_CHALLENGED", "HTTP_403_UNCLASSIFIED"]:
+                            b_body, b_status, b_headers, b_chain, b_diag = await self._fetch_with_browser(current_url)
+                            if b_status == 200 and b_body:
+                                return b_body, 200, b_headers, redirect_chain + b_chain, None
+                            elif b_diag:
+                                return b_body, b_status, b_headers, redirect_chain + b_chain, b_diag
+
                         return body, status, headers, redirect_chain, diag
 
                     return body, status, headers, redirect_chain, None
@@ -424,6 +572,31 @@ class SitemapExtractor:
 
             if status_code != 200 or not body:
                 error_msg = diag.get("what_happened", f"HTTP {status_code}") if diag else f"HTTP {status_code}"
+                
+                # Granular failure classification
+                if diag and diag.get("classification") in ["CDN_WAF_BLOCKED_OR_CHALLENGED", "ROBOTS_BLOCKED"]:
+                    classification = "BLOCKED_BY_TARGET_OR_WAF"
+                elif status_code == 403:
+                    classification = "BLOCKED_BY_TARGET_OR_WAF" if (diag and diag.get("classification") == "CDN_WAF_BLOCKED_OR_CHALLENGED") else "SITEMAP_HTTP_403"
+                elif status_code == 404:
+                    classification = "SITEMAP_HTTP_404"
+                elif status_code == 429:
+                    classification = "SITEMAP_HTTP_429"
+                elif status_code >= 500:
+                    classification = "SITEMAP_HTTP_5XX"
+                elif not body and status_code == 200:
+                    classification = "SITEMAP_EMPTY"
+                else:
+                    err_lower = error_msg.lower()
+                    if "timeout" in err_lower:
+                        classification = "SITEMAP_TIMEOUT"
+                    elif "dns" in err_lower or "name or service not known" in err_lower:
+                        classification = "SITEMAP_DNS_ERROR"
+                    elif "ssl" in err_lower or "cert" in err_lower:
+                        classification = "SITEMAP_SSL_ERROR"
+                    else:
+                        classification = "SITEMAP_CONNECTION_ERROR"
+
                 sitemap_sources.append({
                     "sitemap_url": current_sitemap,
                     "parent_sitemap_url": parent_sitemap,
@@ -432,7 +605,7 @@ class SitemapExtractor:
                     "http_status": status_code,
                     "urls_found": 0,
                     "error_message": error_msg,
-                    "classification": diag.get("classification", "SITEMAP_FETCH_FAILED") if diag else "SITEMAP_FETCH_FAILED"
+                    "classification": classification
                 })
                 errors.append(f"Failed to fetch sitemap '{current_sitemap}': {error_msg}")
                 if progress_callback:
@@ -548,6 +721,21 @@ class SitemapExtractor:
             if progress_callback:
                 await progress_callback(len(sitemap_sources), len(extracted_urls_map), duplicate_count, rejected_count, len(errors))
 
+        success_sources = sum(1 for s in sitemap_sources if s.get("status") in ["PARSED", "INDEX_PARSED"])
+        blocked_sources = sum(1 for s in sitemap_sources if s.get("classification") in ["BLOCKED_BY_TARGET_OR_WAF", "SITEMAP_HTTP_403"])
+        not_found_sources = sum(1 for s in sitemap_sources if s.get("classification") == "SITEMAP_HTTP_404")
+        rate_limited_sources = sum(1 for s in sitemap_sources if s.get("classification") == "SITEMAP_HTTP_429")
+        server_error_sources = sum(1 for s in sitemap_sources if s.get("classification") == "SITEMAP_HTTP_5XX")
+        timeout_sources = sum(1 for s in sitemap_sources if s.get("classification") == "SITEMAP_TIMEOUT")
+        invalid_xml_sources = sum(1 for s in sitemap_sources if s.get("classification") == "SITEMAP_INVALID_XML")
+
+        extraction_completeness = (
+            "COMPLETE" if (len(errors) == 0 and len(sitemap_sources) > 0)
+            else ("PARTIAL" if len(extracted_urls_map) > 0
+            else ("BLOCKED_BY_TARGET_OR_WAF" if blocked_sources > 0
+            else "FAILED"))
+        )
+
         return {
             "total_sitemaps_discovered": len(sitemap_sources),
             "total_urls_extracted": len(extracted_urls_map),
@@ -557,7 +745,18 @@ class SitemapExtractor:
             "sitemap_sources": sitemap_sources,
             "diagnostics": diagnostics,
             "errors": errors,
-            "complete": len(errors) == 0
+            "complete": len(errors) == 0,
+            "extraction_completeness": extraction_completeness,
+            "hierarchy_summary": {
+                "total_sitemaps": len(sitemap_sources),
+                "successful": success_sources,
+                "blocked_by_waf_or_403": blocked_sources,
+                "not_found_404": not_found_sources,
+                "rate_limited_429": rate_limited_sources,
+                "server_error_5xx": server_error_sources,
+                "timeouts": timeout_sources,
+                "invalid_xml": invalid_xml_sources
+            }
         }
 
     async def extract_from_uploaded_bytes(

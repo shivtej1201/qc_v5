@@ -1,0 +1,346 @@
+{
+  "target_sitemap": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-pdp-b2b-bmall-sitemap-4.xml",
+  "import_id": "09833ba2-ff55-4b41-b887-9de3d903fba1",
+  "created_at": "2026-11-16T20:29:03.574900+00:00",
+  "sitemap_status_data": {
+    "id": "09833ba2-ff55-4b41-b887-9de3d903fba1",
+    "title": "Bajaj Mall Sitemap 4 E2E Test",
+    "status": "COMPLETED",
+    "total_sitemaps": 1,
+    "processed_sitemaps": 1,
+    "total_urls": 16363,
+    "unique_urls": 16345,
+    "duplicate_urls": 18,
+    "rejected_urls": 0,
+    "error_count": 0,
+    "crawl_job_id": null,
+    "error_message": "",
+    "created_at": "2026-11-16T20:29:03.571286Z",
+    "updated_at": "2026-11-16T20:29:07.121324Z"
+  },
+  "lifecycle_events": [
+    {
+      "from_status": null,
+      "to_status": "EXTRACTING",
+      "timestamp": "2026-11-16T20:29:03.644243+00:00",
+      "elapsed_seconds": 0.069,
+      "data": {
+        "id": "09833ba2-ff55-4b41-b887-9de3d903fba1",
+        "title": "Bajaj Mall Sitemap 4 E2E Test",
+        "status": "EXTRACTING",
+        "total_sitemaps": 0,
+        "processed_sitemaps": 0,
+        "total_urls": 0,
+        "unique_urls": 0,
+        "duplicate_urls": 0,
+        "rejected_urls": 0,
+        "error_count": 0,
+        "crawl_job_id": null,
+        "error_message": null,
+        "created_at": "2026-11-16T20:29:03.571286Z",
+        "updated_at": "2026-11-16T20:29:03.572964Z"
+      }
+    },
+    {
+      "from_status": "EXTRACTING",
+      "to_status": "COMPLETED",
+      "timestamp": "2026-11-16T20:29:07.428112+00:00",
+      "elapsed_seconds": 3.853,
+      "data": {
+        "id": "09833ba2-ff55-4b41-b887-9de3d903fba1",
+        "title": "Bajaj Mall Sitemap 4 E2E Test",
+        "status": "COMPLETED",
+        "total_sitemaps": 1,
+        "processed_sitemaps": 1,
+        "total_urls": 16363,
+        "unique_urls": 16345,
+        "duplicate_urls": 18,
+        "rejected_urls": 0,
+        "error_count": 0,
+        "crawl_job_id": null,
+        "error_message": "",
+        "created_at": "2026-11-16T20:29:03.571286Z",
+        "updated_at": "2026-11-16T20:29:07.121324Z"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": 10,
+      "import_id": "09833ba2-ff55-4b41-b887-9de3d903fba1",
+      "sitemap_url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-pdp-b2b-bmall-sitemap-4.xml",
+      "parent_sitemap_url": "",
+      "depth": 0,
+      "status": "PARSED",
+      "http_status": 200,
+      "urls_found": 16363,
+      "classification": "VALID",
+      "error_message": "",
+      "created_at": "2026-11-16T20:29:06.909988Z"
+    }
+  ],
+  "diagnostics": [],
+  "extracted_urls_total": 16345,
+  "crawl_job_id": "49573090-28d0-4f2b-a99a-fc8873c19988",
+  "crawl_lifecycle": [
+    {
+      "status": "QUEUED",
+      "timestamp": "2026-11-16T20:29:07.528237+00:00",
+      "elapsed_seconds": 0.006,
+      "stats": {
+        "total_extracted": 0,
+        "total_unique": 0,
+        "duplicate_avoided": 0,
+        "dedup_ratio": 0.0,
+        "total_checked": 0,
+        "unique_validated": 0,
+        "working": 0,
+        "working_200": 0,
+        "redirects": 0,
+        "client_errors_4xx": 0,
+        "server_errors": 0,
+        "timeouts": 0,
+        "network_failures": 0,
+        "blocked_skipped": 0,
+        "validation_failures": 0,
+        "retries_count": 0,
+        "pending": 0,
+        "queued_destinations": 0,
+        "in_flight_validations": 0,
+        "completed_unique": 0,
+        "urls_per_minute": 0.0,
+        "estimated_remaining_time": "0s",
+        "current_concurrency": 32,
+        "peak_concurrency_observed": 32,
+        "crawl_duration_sec": 0.0,
+        "created_at": "2026-11-16T20:29:07.503748Z",
+        "updated_at": "2026-11-16T20:29:07.503748Z",
+        "job_id": "49573090-28d0-4f2b-a99a-fc8873c19988",
+        "mode": "link_audit",
+        "status": "QUEUED",
+        "processed_records": 0,
+        "total_records": 16345
+      }
+    },
+    {
+      "status": "RUNNING",
+      "timestamp": "2026-11-16T20:29:10.149770+00:00",
+      "elapsed_seconds": 2.627,
+      "stats": {
+        "total_extracted": 1150,
+        "total_unique": 197,
+        "duplicate_avoided": 953,
+        "dedup_ratio": 82.87,
+        "total_checked": 0,
+        "unique_validated": 0,
+        "working": 0,
+        "working_200": 0,
+        "redirects": 0,
+        "client_errors_4xx": 0,
+        "server_errors": 0,
+        "timeouts": 0,
+        "network_failures": 0,
+        "blocked_skipped": 0,
+        "validation_failures": 0,
+        "retries_count": 0,
+        "pending": 197,
+        "queued_destinations": 197,
+        "in_flight_validations": 0,
+        "completed_unique": 0,
+        "urls_per_minute": 0.0,
+        "estimated_remaining_time": "0s",
+        "current_concurrency": 32,
+        "peak_concurrency_observed": 32,
+        "crawl_duration_sec": 2.63,
+        "created_at": "2026-11-16T20:29:07.503748Z",
+        "updated_at": "2026-11-16T20:29:08.395449Z",
+        "job_id": "49573090-28d0-4f2b-a99a-fc8873c19988",
+        "mode": "link_audit",
+        "status": "RUNNING",
+        "processed_records": 2,
+        "total_records": 16345
+      }
+    }
+  ],
+  "crawl_stats_final": {
+    "total_extracted": 27768,
+    "total_unique": 219,
+    "duplicate_avoided": 27549,
+    "dedup_ratio": 99.21,
+    "total_checked": 0,
+    "unique_validated": 0,
+    "working": 0,
+    "working_200": 0,
+    "redirects": 0,
+    "client_errors_4xx": 0,
+    "server_errors": 0,
+    "timeouts": 0,
+    "network_failures": 0,
+    "blocked_skipped": 0,
+    "validation_failures": 0,
+    "retries_count": 0,
+    "pending": 219,
+    "queued_destinations": 219,
+    "in_flight_validations": 0,
+    "completed_unique": 0,
+    "urls_per_minute": 0.0,
+    "estimated_remaining_time": "0s",
+    "current_concurrency": 32,
+    "peak_concurrency_observed": 32,
+    "crawl_duration_sec": 58.72,
+    "created_at": "2026-11-16T20:29:07.503748Z",
+    "updated_at": "2026-11-16T20:30:06.221670Z",
+    "job_id": "49573090-28d0-4f2b-a99a-fc8873c19988",
+    "mode": "link_audit",
+    "status": "RUNNING",
+    "processed_records": 457,
+    "total_records": 16345
+  },
+  "job_row": [
+    "49573090-28d0-4f2b-a99a-fc8873c19988",
+    "RUNNING",
+    16345,
+    473,
+    "2026-11-16T20:29:07.503748Z",
+    "2026-11-16T20:30:08.224037Z"
+  ],
+  "batches_rows": [
+    [
+      "a8026b31-8e4a-4364-b0e5-13e6c60aa462",
+      0,
+      1000,
+      59,
+      "RUNNING",
+      "worker_f0f65c83_w0"
+    ],
+    [
+      "bcfc81ec-b914-4b97-a2de-59928dfc51ae",
+      1,
+      1000,
+      59,
+      "RUNNING",
+      "worker_f0f65c83_w1"
+    ],
+    [
+      "10fbbc21-6a06-48da-921c-adf1f90d645e",
+      2,
+      1000,
+      60,
+      "RUNNING",
+      "worker_f0f65c83_w2"
+    ],
+    [
+      "39a68422-65a3-432e-a472-0782d197c0e2",
+      3,
+      1000,
+      59,
+      "RUNNING",
+      "worker_f0f65c83_w3"
+    ],
+    [
+      "f345fcb0-ec85-4d61-ab76-26e61193b2ae",
+      4,
+      1000,
+      58,
+      "RUNNING",
+      "worker_f0f65c83_w4"
+    ],
+    [
+      "8ea2cbdd-4a0e-4751-86fb-ef833e7eef61",
+      5,
+      1000,
+      61,
+      "RUNNING",
+      "worker_f0f65c83_w5"
+    ],
+    [
+      "76d6c8c8-63e2-44fa-9724-4b66469ff313",
+      6,
+      1000,
+      58,
+      "RUNNING",
+      "worker_f0f65c83_w6"
+    ],
+    [
+      "a956ab0b-61de-4cab-849d-137236b5c0d2",
+      7,
+      1000,
+      59,
+      "RUNNING",
+      "worker_f0f65c83_w7"
+    ],
+    [
+      "33538a02-01db-4816-94ad-530af3528377",
+      8,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "062297f8-7272-4749-88bd-4d17d283936a",
+      9,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "700013a2-8cfb-4888-8dd8-4d920ba1810a",
+      10,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "4d952d6c-cfdf-460a-876f-c924120bd92b",
+      11,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "c2a3f437-b2e9-4402-81e7-f4ed5d5e22d5",
+      12,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "87d174bf-b8ad-47f7-82a1-39691699b52b",
+      13,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "a0bad627-376e-4d9b-a940-a699dc156cd9",
+      14,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "08fb355a-52e6-4cfb-a759-987b8a727f00",
+      15,
+      1000,
+      0,
+      "QUEUED",
+      null
+    ],
+    [
+      "1c4c0977-6162-4bba-8a5a-f5ab105fa01b",
+      16,
+      345,
+      0,
+      "QUEUED",
+      null
+    ]
+  ],
+  "integrity_check": "ok"
+}

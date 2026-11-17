@@ -366,7 +366,9 @@
                         <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                             <div>
                                 <div class="flex items-center gap-2">
-                                    <span id="explorer-status-badge" class="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-blue-100 text-blue-800">RUNNING</span>
+                                    <span id="explorer-status-badge-container">
+                                        <span id="explorer-status-badge" class="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-blue-100 text-blue-800">RUNNING</span>
+                                    </span>
                                     <h3 id="explorer-job-title" class="font-black text-slate-900 dark:text-white text-base">Job: Loading...</h3>
                                 </div>
                                 <div id="explorer-job-meta" class="text-xs text-slate-500 mt-1">Stage: Extraction & Metadata Tagging</div>
@@ -1218,7 +1220,18 @@
             <button onclick="closeJobDetailsModal()" class="absolute top-5 right-5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 font-bold text-2xl leading-none">&times;</button>
             <h2 id="modal-details-title" class="text-xl font-black text-slate-900 dark:text-white mb-4">Job Inspection</h2>
             
-            <div id="modal-details-kpi-grid" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <!-- Progress Bar Dual-Meter Container -->
+            <div id="modal-details-progress-container" class="mb-5 p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-800">
+                <div class="flex justify-between text-xs font-bold mb-1.5">
+                    <span>Completed URLs Crawled</span>
+                    <span id="modal-details-progress-text">0 / 0 (0%)</span>
+                </div>
+                <div class="h-2.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                    <div id="modal-details-progress-bar" class="h-full bg-brand-600 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div id="modal-details-kpi-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-6">
                 <!-- KPI cards -->
             </div>
 
@@ -1451,6 +1464,7 @@
         let currentUploadId = null;
         let currentUploadFilename = null;
         let selectedJobIdForExplorer = null;
+        let currentInspectedJobId = null;
         let activeView = 'overview';
         let recordsCurrentPage = 1;
         let recordsSearchTimeout = null;
@@ -1458,6 +1472,7 @@
 
         function switchView(viewName) {
             activeView = viewName;
+            try { sessionStorage.setItem('activeView', viewName); } catch (e) {}
             document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
 
@@ -1544,8 +1559,17 @@
                     updateActiveExplorer(selectedJobIdForExplorer);
                 }
 
-                // Adjust polling cadence: 2s if active jobs exist, 10s if idle
-                scheduleNextPoll(activeCount > 0 ? 2000 : 10000);
+                // If inspection drawer is open, update its live stats in realtime
+                if (currentInspectedJobId && !document.getElementById('job-details-modal').classList.contains('hidden')) {
+                    updateInspectedJob(currentInspectedJobId);
+                }
+
+                // Adjust polling cadence: 2s if active jobs exist or inspecting/exploring active job, 10s if idle
+                const isTrackingActive = Boolean(
+                    (selectedJobIdForExplorer && currentJobs.some(j => j.id === selectedJobIdForExplorer && ['RUNNING', 'CLASSIFYING', 'VALIDATING', 'FINALIZING', 'QUEUED'].includes(j.status))) ||
+                    (currentInspectedJobId && currentJobs.some(j => j.id === currentInspectedJobId && ['RUNNING', 'CLASSIFYING', 'VALIDATING', 'FINALIZING', 'QUEUED'].includes(j.status)))
+                );
+                scheduleNextPoll((activeCount > 0 || isTrackingActive) ? 2000 : 10000);
             } catch (err) {
                 console.error('[Poll Error]', err);
                 scheduleNextPoll(10000);
@@ -1633,6 +1657,7 @@
                         </td>
                         <td class="p-3.5">${getStatusBadge(j.status)}</td>
                         <td class="p-3.5 text-right">
+                            <button onclick="selectJobForLinkAudit('${j.id}')" class="text-indigo-600 dark:text-indigo-400 hover:underline font-bold mr-2">Explorer</button>
                             <button onclick="inspectJob('${j.id}')" class="text-brand-600 dark:text-brand-400 hover:underline font-bold mr-2">Details</button>
                             ${['COMPLETED', 'PARTIAL'].includes(j.status) ? `<a href="/api/jobs/${j.id}/download" class="text-emerald-600 dark:text-emerald-400 font-bold hover:underline">Download</a>` : ''}
                         </td>
@@ -1667,6 +1692,7 @@
                         <td class="p-3.5">${getStatusBadge(j.status)}</td>
                         <td class="p-3.5 text-slate-400 text-[11px]">${dt}</td>
                         <td class="p-3.5 text-right space-x-2">
+                            <button onclick="selectJobForLinkAudit('${j.id}')" class="text-indigo-600 dark:text-indigo-400 hover:underline font-bold">Explorer</button>
                             <button onclick="inspectJob('${j.id}')" class="text-brand-600 dark:text-brand-400 hover:underline font-bold">Inspect</button>
                             ${['RUNNING', 'CLASSIFYING', 'VALIDATING', 'FINALIZING'].includes(j.status) ? `
                                 <button onclick="actionJob('${j.id}', 'pause')" class="text-amber-600 hover:underline">Pause</button>
@@ -1834,12 +1860,18 @@
                     })
                 });
                 if (!res.ok) throw new Error(await res.text());
+                const startData = await res.json();
 
                 showToast('Audit jobs launched successfully', 'success');
                 // Hide selector cards
                 document.getElementById('link-sheet-selector')?.classList.add('hidden');
                 document.getElementById('image-sheet-selector')?.classList.add('hidden');
                 document.getElementById('api-sheet-selector')?.classList.add('hidden');
+
+                // If link audit and we have created jobs, open explorer for the first job immediately
+                if (mode === 'link_audit' && startData.job_ids && startData.job_ids.length > 0) {
+                    selectJobForLinkAudit(startData.job_ids[0]);
+                }
 
                 // Refresh and engage wake lock
                 fetchJobs();
@@ -1852,13 +1884,14 @@
         // ---------------------------------------------------------------------
         // 6. LIVE EXPLORER & PAGINATED RECORDS
         // ---------------------------------------------------------------------
-        function selectJobForLinkAudit(jobId) {
+        async function selectJobForLinkAudit(jobId) {
             selectedJobIdForExplorer = jobId;
+            try { sessionStorage.setItem('selectedJobIdForExplorer', jobId); } catch(e){}
             switchView('link-audit');
             document.getElementById('link-active-explorer').classList.remove('hidden');
             recordsCurrentPage = 1;
             loadRecordsPage(1);
-            updateActiveExplorer(jobId);
+            return await updateActiveExplorer(jobId);
         }
 
         async function updateActiveExplorer(jobId) {
@@ -1868,23 +1901,30 @@
                 const stats = await res.json();
 
                 document.getElementById('explorer-job-title').textContent = `Audit: ${stats.job_id || jobId}`;
-                document.getElementById('explorer-status-badge').outerHTML = getStatusBadge(stats.status);
+                const badgeContainer = document.getElementById('explorer-status-badge-container') || document.getElementById('explorer-status-badge')?.parentElement;
+                if (badgeContainer) {
+                    badgeContainer.innerHTML = `<span id="explorer-status-badge">${getStatusBadge(stats.status)}</span>`;
+                }
 
                 // Source extraction progress: processed_records / total_records
                 const jobMeta = currentJobs.find(j => j.id === jobId);
-                const sourceTotal = jobMeta ? jobMeta.total_records : stats.total_extracted;
-                const sourceProc = jobMeta ? jobMeta.processed_records : stats.total_extracted;
+                const sourceProc = (stats.processed_records !== undefined && stats.processed_records !== null)
+                    ? Number(stats.processed_records)
+                    : (jobMeta && jobMeta.processed_records !== undefined ? Number(jobMeta.processed_records) : 0);
+                const sourceTotal = (stats.total_records !== undefined && stats.total_records !== null)
+                    ? Number(stats.total_records)
+                    : (jobMeta && jobMeta.total_records !== undefined ? Number(jobMeta.total_records) : 0);
                 const sourcePct = sourceTotal > 0 ? Math.min(100, Math.round((sourceProc / sourceTotal) * 100)) : 0;
 
-                document.getElementById('explorer-source-progress-text').textContent = `${sourceProc} / ${sourceTotal} (${sourcePct}%)`;
+                document.getElementById('explorer-source-progress-text').textContent = `${sourceProc.toLocaleString()} / ${sourceTotal.toLocaleString()} (${sourcePct}%)`;
                 document.getElementById('explorer-source-progress-bar').style.width = `${sourcePct}%`;
 
                 // Destination validation progress: unique_validated / total_unique
-                const destTotal = stats.total_unique || 0;
-                const destVal = stats.unique_validated || 0;
+                const destTotal = Number(stats.total_unique || 0);
+                const destVal = Number(stats.unique_validated || 0);
                 const destPct = destTotal > 0 ? Math.min(100, Math.round((destVal / destTotal) * 100)) : 0;
 
-                document.getElementById('explorer-dest-progress-text').textContent = `${destVal} / ${destTotal} (${destPct}%)`;
+                document.getElementById('explorer-dest-progress-text').textContent = `${destVal.toLocaleString()} / ${destTotal.toLocaleString()} (${destPct}%)`;
                 document.getElementById('explorer-dest-progress-bar').style.width = `${destPct}%`;
 
                 // Quick stats
@@ -2005,39 +2045,84 @@
         // 7. JOB INSPECTION DRAWER & ACTIONS
         // ---------------------------------------------------------------------
         async function inspectJob(jobId) {
+            currentInspectedJobId = jobId;
             const modal = document.getElementById('job-details-modal');
             modal.classList.remove('hidden');
-            document.getElementById('modal-details-title').textContent = `Inspecting Job: ${jobId.substring(0, 12)}...`;
+            document.getElementById('modal-details-title').textContent = `Inspecting Job: ${jobId.substring(0, 16)}...`;
+            await updateInspectedJob(jobId);
+        }
+
+        async function updateInspectedJob(jobId) {
+            if (!jobId) return;
+            const modal = document.getElementById('job-details-modal');
+            if (modal.classList.contains('hidden')) return;
 
             try {
                 const statsRes = await fetch(`/api/jobs/${jobId}/stats`);
+                if (!statsRes.ok) return;
                 const stats = await statsRes.json();
-                const grid = document.getElementById('modal-details-kpi-grid');
 
-                grid.innerHTML = `
-                    <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl"><div class="text-[10px] text-slate-400 uppercase font-bold">Status</div><div class="text-lg font-black">${stats.status}</div></div>
-                    <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl"><div class="text-[10px] text-slate-400 uppercase font-bold">Total Extracted</div><div class="text-lg font-black">${stats.total_extracted || 0}</div></div>
-                    <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl"><div class="text-[10px] text-slate-400 uppercase font-bold">Unique Dest</div><div class="text-lg font-black">${stats.total_unique || 0}</div></div>
-                    <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl"><div class="text-[10px] text-slate-400 uppercase font-bold">200 OK</div><div class="text-lg font-black text-emerald-600">${stats.working_200 || stats.working || 0}</div></div>
-                `;
+                const tot = Number(stats.total_records || 0);
+                const proc = Number(stats.processed_records || 0);
+                const pct = tot > 0 ? Math.min(100, Math.round((proc / tot) * 100)) : 0;
+
+                const progText = document.getElementById('modal-details-progress-text');
+                if (progText) progText.textContent = `${proc.toLocaleString()} / ${tot.toLocaleString()} (${pct}%)`;
+                const progBar = document.getElementById('modal-details-progress-bar');
+                if (progBar) progBar.style.width = `${pct}%`;
+
+                const grid = document.getElementById('modal-details-kpi-grid');
+                if (grid) {
+                    grid.innerHTML = `
+                        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                            <div class="text-[10px] text-slate-400 uppercase font-bold">Status</div>
+                            <div class="mt-1">${getStatusBadge(stats.status)}</div>
+                        </div>
+                        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                            <div class="text-[10px] text-slate-400 uppercase font-bold">Completed URLs</div>
+                            <div id="modal-kpi-completed" class="text-base font-black text-brand-600 dark:text-brand-400 mt-0.5">${proc.toLocaleString()} / ${tot.toLocaleString()}</div>
+                            <div class="text-[10px] text-slate-400 font-semibold">${pct}% crawled</div>
+                        </div>
+                        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                            <div class="text-[10px] text-slate-400 uppercase font-bold">Extracted Links</div>
+                            <div class="text-base font-black text-slate-800 dark:text-slate-200 mt-0.5">${(stats.total_extracted || 0).toLocaleString()}</div>
+                            <div class="text-[10px] text-slate-400 font-semibold">raw links</div>
+                        </div>
+                        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                            <div class="text-[10px] text-slate-400 uppercase font-bold">Unique Dest</div>
+                            <div class="text-base font-black text-slate-800 dark:text-slate-200 mt-0.5">${(stats.total_unique || 0).toLocaleString()}</div>
+                            <div class="text-[10px] text-slate-400 font-semibold">destinations</div>
+                        </div>
+                        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                            <div class="text-[10px] text-slate-400 uppercase font-bold">200 OK Validated</div>
+                            <div class="text-base font-black text-emerald-600 mt-0.5">${(stats.working_200 || stats.working || 0).toLocaleString()}</div>
+                            <div class="text-[10px] text-slate-400 font-semibold">healthy links</div>
+                        </div>
+                    `;
+                }
 
                 const batchRes = await fetch(`/api/jobs/${jobId}/batches`);
-                const bData = await batchRes.json();
-                const tb = document.getElementById('modal-batches-tbody');
-                tb.innerHTML = (bData.batches || []).map(b => `
-                    <tr>
-                        <td class="p-2 font-mono">Batch #${b.batch_index}</td>
-                        <td class="p-2">${b.processed_records} / ${b.total_records}</td>
-                        <td class="p-2">${getStatusBadge(b.status)}</td>
-                        <td class="p-2 text-slate-400">${b.worker_id || 'None'}</td>
-                    </tr>
-                `).join('');
+                if (batchRes.ok) {
+                    const bData = await batchRes.json();
+                    const tb = document.getElementById('modal-batches-tbody');
+                    if (tb) {
+                        tb.innerHTML = (bData.batches || []).map(b => `
+                            <tr>
+                                <td class="p-2 font-mono">Batch #${b.batch_index}</td>
+                                <td class="p-2">${(b.processed_records || 0).toLocaleString()} / ${(b.total_records || 0).toLocaleString()}</td>
+                                <td class="p-2">${getStatusBadge(b.status)}</td>
+                                <td class="p-2 text-slate-400">${b.worker_id || 'None'}</td>
+                            </tr>
+                        `).join('');
+                    }
+                }
             } catch (e) {
-                console.error(e);
+                console.error('[Inspect update error]', e);
             }
         }
 
         function closeJobDetailsModal() {
+            currentInspectedJobId = null;
             document.getElementById('job-details-modal').classList.add('hidden');
         }
 
@@ -2437,6 +2522,7 @@
 
                 const data = await res.json();
                 currentSitemapImportId = data.import_id;
+                try { sessionStorage.setItem('currentSitemapImportId', data.import_id); } catch(e){}
 
                 showToast('Sitemap extraction initiated!', 'success');
                 msgEl.textContent = 'Extraction running in background...';
@@ -2517,6 +2603,19 @@
                     if (sitemapStatusPollTimer) {
                         clearInterval(sitemapStatusPollTimer);
                         sitemapStatusPollTimer = null;
+                    }
+                    const msgEl = document.getElementById('sitemap-import-msg');
+                    if (msgEl) {
+                        if (imp.status === 'COMPLETED') {
+                            msgEl.textContent = 'Extraction complete.';
+                            msgEl.className = 'text-xs font-semibold text-emerald-600';
+                        } else if (imp.status === 'PARTIAL') {
+                            msgEl.textContent = 'Extraction partially completed with warnings (see details below).';
+                            msgEl.className = 'text-xs font-semibold text-amber-600';
+                        } else {
+                            msgEl.textContent = 'Extraction failed. See diagnostic details below.';
+                            msgEl.className = 'text-xs font-semibold text-rose-600';
+                        }
                     }
                     document.getElementById('step-pill-3')?.classList.add('text-brand-600', 'dark:text-brand-400');
                     fetchSitemapSources();
@@ -2769,6 +2868,7 @@
 
                 const data = await res.json();
                 currentSitemapCrawlJobId = data.job_id;
+                try { sessionStorage.setItem('currentSitemapCrawlJobId', data.job_id); } catch(e){}
 
                 showToast(`Crawl Job Queued: ${data.job_id.slice(0, 8)}`, 'success');
                 document.getElementById('step-pill-4')?.classList.add('text-brand-600', 'dark:text-brand-400');
@@ -2795,40 +2895,59 @@
         async function pollSitemapCrawlProgress() {
             if (!currentSitemapCrawlJobId) return;
             try {
-                const res = await fetch('/api/jobs');
-                if (!res.ok) return;
-                const data = await res.json();
+                const res = await fetch(`/api/jobs/${currentSitemapCrawlJobId}/stats`);
+                if (res.ok) {
+                    const stats = await res.json();
+                    const proc = (stats.processed_records !== undefined && stats.processed_records !== null) ? stats.processed_records : (stats.unique_validated || 0);
+                    const total = (stats.total_records !== undefined && stats.total_records !== null) ? stats.total_records : (stats.total_unique || 0);
+                    updateSitemapCrawlUI(stats.status, proc, total);
+                    return;
+                }
+                // Fallback to /api/jobs
+                const listRes = await fetch('/api/jobs');
+                if (!listRes.ok) return;
+                const data = await listRes.json();
                 const job = (data.jobs || []).find(j => j.id === currentSitemapCrawlJobId);
-                if (!job) return;
-
-                const statusEl = document.getElementById('sitemap-crawl-status-badge');
-                statusEl.textContent = job.status;
-                const statusColors = {
-                    'QUEUED': 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300',
-                    'RUNNING': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 animate-pulse',
-                    'COMPLETED': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300',
-                    'PARTIAL': 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300',
-                    'FAILED': 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-300',
-                    'CANCELLED': 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
-                };
-                statusEl.className = `px-2.5 py-1 rounded-full text-xs font-black uppercase tracking-wider ${statusColors[job.status] || 'bg-slate-100'}`;
-
-                const total = job.total_records || 0;
-                const done = job.processed_records || 0;
-                const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-                document.getElementById('sitemap-crawl-progress-text').textContent = `${done.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`;
-                document.getElementById('sitemap-crawl-progress-bar').style.width = `${pct}%`;
-
-                if (['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(job.status)) {
-                    if (sitemapCrawlPollTimer) {
-                        clearInterval(sitemapCrawlPollTimer);
-                        sitemapCrawlPollTimer = null;
-                    }
-                    showToast(`Crawl Job ${job.status}!`, job.status === 'COMPLETED' ? 'success' : 'info');
-                    loadSitemapDiagnostics();
+                if (job) {
+                    updateSitemapCrawlUI(job.status, job.processed_records, job.total_records);
                 }
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        function updateSitemapCrawlUI(status, done, total) {
+            const statusEl = document.getElementById('sitemap-crawl-status-badge');
+            if (!statusEl) return;
+            statusEl.textContent = status;
+            const statusColors = {
+                'QUEUED': 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300',
+                'RUNNING': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 animate-pulse',
+                'VALIDATING': 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300 animate-pulse',
+                'CLASSIFYING': 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 animate-pulse',
+                'FINALIZING': 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/60 dark:text-cyan-300 animate-pulse',
+                'COMPLETED': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300',
+                'PARTIAL': 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300',
+                'FAILED': 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-300',
+                'CANCELLED': 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+            };
+            statusEl.className = `px-2.5 py-1 rounded-full text-xs font-black uppercase tracking-wider ${statusColors[status] || 'bg-slate-100'}`;
+
+            const tot = total || 0;
+            const dn = done || 0;
+            const pct = tot > 0 ? Math.min(100, Math.round((dn / tot) * 100)) : 0;
+            const textEl = document.getElementById('sitemap-crawl-progress-text');
+            if (textEl) textEl.textContent = `${dn.toLocaleString()} / ${tot.toLocaleString()} (${pct}%)`;
+            const barEl = document.getElementById('sitemap-crawl-progress-bar');
+            if (barEl) barEl.style.width = `${pct}%`;
+
+            if (['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(status)) {
+                if (sitemapCrawlPollTimer) {
+                    clearInterval(sitemapCrawlPollTimer);
+                    sitemapCrawlPollTimer = null;
+                }
+                showToast(`Crawl Job ${status}!`, status === 'COMPLETED' ? 'success' : 'info');
+                loadSitemapDiagnostics();
             }
         }
 
@@ -2944,6 +3063,49 @@
             ScreenWakeLockService.init();
             fetchJobs();
             fetchOverview();
+
+            // Restore persistent session state across page refreshes
+            try {
+                const savedImportId = sessionStorage.getItem('currentSitemapImportId');
+                if (savedImportId) {
+                    currentSitemapImportId = savedImportId;
+                    document.getElementById('sitemap-progress-card')?.classList.remove('hidden');
+                    document.getElementById('sitemap-urls-card')?.classList.remove('hidden');
+                    document.getElementById('sitemap-crawl-launch-card')?.classList.remove('hidden');
+                    refreshSitemapStatus();
+                    loadSitemapUrls(1);
+                }
+
+                const savedCrawlJobId = sessionStorage.getItem('currentSitemapCrawlJobId');
+                if (savedCrawlJobId) {
+                    currentSitemapCrawlJobId = savedCrawlJobId;
+                    const card = document.getElementById('sitemap-crawl-job-card');
+                    if (card) {
+                        card.classList.remove('hidden');
+                        document.getElementById('sitemap-crawl-job-id').textContent = savedCrawlJobId;
+                        if (sitemapCrawlPollTimer) clearInterval(sitemapCrawlPollTimer);
+                        sitemapCrawlPollTimer = setInterval(pollSitemapCrawlProgress, 1500);
+                        pollSitemapCrawlProgress();
+                    }
+                }
+
+                const savedView = sessionStorage.getItem('activeView');
+                if (savedView) {
+                    switchView(savedView);
+                }
+
+                const savedExplorerJobId = sessionStorage.getItem('selectedJobIdForExplorer');
+                if (savedExplorerJobId) {
+                    selectedJobIdForExplorer = savedExplorerJobId;
+                    switchView('link-audit');
+                    document.getElementById('link-active-explorer')?.classList.remove('hidden');
+                    recordsCurrentPage = 1;
+                    loadRecordsPage(1);
+                    updateActiveExplorer(savedExplorerJobId);
+                }
+            } catch (e) {
+                console.warn('[Session restore warning]', e);
+            }
 
             // Mobile menu toggle
             document.getElementById('mobile-menu-btn')?.addEventListener('click', () => {

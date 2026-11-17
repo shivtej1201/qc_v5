@@ -1,4 +1,5 @@
 import aiosqlite
+import aiosqlite.core
 import asyncio
 import json
 import time
@@ -8,17 +9,30 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from db_metrics import db_metrics
 
+# Ensure background SQLite worker threads are daemon threads so test runners
+# and subprocesses exit cleanly without hanging on unclosed or cached connections.
+_orig_conn_init = aiosqlite.core.Connection.__init__
+def _daemon_conn_init(self, *args, **kwargs):
+    _orig_conn_init(self, *args, **kwargs)
+    self._thread.daemon = True
+aiosqlite.core.Connection.__init__ = _daemon_conn_init
+
 class Database:
     def __init__(self, db_path: str = settings.DB_FILE):
         self.db_path = db_path
         self.conn = None
+        self._link_stats_cache = {}
         
     async def connect(self):
         self.conn = await aiosqlite.connect(self.db_path, isolation_level="IMMEDIATE")
-        # Optimizations
+        # Production WAL & Performance Optimizations
         await self.conn.execute("PRAGMA journal_mode=WAL;")
         await self.conn.execute("PRAGMA synchronous=NORMAL;")
         await self.conn.execute(f"PRAGMA busy_timeout={settings.DB_BUSY_TIMEOUT};")
+        await self.conn.execute("PRAGMA cache_size=-262144;")
+        await self.conn.execute("PRAGMA mmap_size=268435456;")
+        await self.conn.execute("PRAGMA temp_store=MEMORY;")
+        await self.conn.execute("PRAGMA wal_autocheckpoint=50000;")
 
         
         await self.conn.execute("""
@@ -385,28 +399,47 @@ class Database:
                 WHERE (worker_id = ? OR worker_id LIKE ? OR (lease_expires_at IS NOT NULL AND lease_expires_at < ?))
             """, (worker_id, prefix, now))
         else:
-            # Only reset abandoned batches whose lease has expired
+            # Only reset abandoned batches whose lease has expired or have no assigned worker
             await self.conn.execute("""
                 UPDATE batches SET status = 'QUEUED', worker_id = NULL, lease_expires_at = NULL 
-                WHERE status = 'RUNNING' AND (lease_expires_at IS NULL OR lease_expires_at < ?)
+                WHERE status = 'RUNNING' AND (worker_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?)
             """, (now,))
             await self.conn.execute("""
                 UPDATE jobs SET worker_id = NULL, lease_expires_at = NULL 
-                WHERE lease_expires_at IS NOT NULL AND lease_expires_at < ?
+                WHERE worker_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?
             """, (now,))
 
-        # Only reset jobs back to QUEUED if they have NO remaining active RUNNING batches
+        # 1. Finalize RUNNING jobs that have NO remaining RUNNING or QUEUED batches
         await self.conn.execute("""
-            UPDATE jobs SET status = 'QUEUED' 
-            WHERE status = 'RUNNING' AND id NOT IN (
-                SELECT DISTINCT job_id FROM batches WHERE status = 'RUNNING'
-            )
-        """)
+            UPDATE jobs SET status = CASE 
+                WHEN id IN (SELECT DISTINCT job_id FROM batches WHERE status = 'FAILED') THEN 'PARTIAL'
+                ELSE 'COMPLETED'
+            END, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+            WHERE status = 'RUNNING' 
+              AND id NOT IN (SELECT DISTINCT job_id FROM batches WHERE status IN ('RUNNING', 'QUEUED'))
+              AND id IN (SELECT DISTINCT job_id FROM batches)
+        """, (now,))
+
+        # 2. Only reset jobs back to QUEUED if they have remaining QUEUED batches and no active RUNNING batches
+        await self.conn.execute("""
+            UPDATE jobs SET status = 'QUEUED', worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+            WHERE status = 'RUNNING' 
+              AND id NOT IN (SELECT DISTINCT job_id FROM batches WHERE status = 'RUNNING')
+              AND id IN (SELECT DISTINCT job_id FROM batches WHERE status = 'QUEUED')
+        """, (now,))
+
+        # 3. Mark empty or abandoned QUEUED jobs with 0 batches as FAILED so they do not hang indefinitely
+        await self.conn.execute("""
+            UPDATE jobs SET status = 'FAILED', updated_at = ?
+            WHERE status = 'QUEUED' 
+              AND id NOT IN (SELECT DISTINCT job_id FROM batches)
+        """, (now,))
         await self.conn.commit()
 
     async def close(self):
         if self.conn:
             await self.conn.close()
+            self.conn = None
 
     async def get_cached_result(self, normalized_url: str):
         if not settings.CACHE_ENABLED:
@@ -504,6 +537,161 @@ class Database:
         """
         await self._execute_with_retry(sql, results)
 
+    async def batch_insert_results_and_destinations(
+        self,
+        results: Optional[List[Dict[str, Any]]] = None,
+        extracted: Optional[List[Dict[str, Any]]] = None
+    ):
+        """Single-transaction combined insertion of url_results, job_destinations, and extracted_links to eliminate commit overhead."""
+        if not results and not extracted:
+            return
+            
+        if results:
+            for r in results:
+                r.setdefault('original_url', r.get('normalized_url'))
+                r.setdefault('page_type', None)
+                r.setdefault('business', None)
+                r.setdefault('classification_method', None)
+            
+        sql_results = """
+            INSERT INTO url_results (
+                normalized_url, original_url, initial_status_code, final_status_code, status,
+                final_url, redirect_count, redirect_chain, response_time_ms, content_type,
+                content_length, error_type, error_message, check_method, browser_verified,
+                page_type, business, classification_method, checked_at
+            ) VALUES (
+                :normalized_url, :original_url, :initial_status_code, :final_status_code, :status,
+                :final_url, :redirect_count, :redirect_chain, :response_time_ms, :content_type,
+                :content_length, :error_type, :error_message, :check_method, :browser_verified,
+                :page_type, :business, :classification_method, :checked_at
+            )
+            ON CONFLICT(normalized_url) DO UPDATE SET
+                original_url = excluded.original_url,
+                initial_status_code = excluded.initial_status_code,
+                final_status_code = excluded.final_status_code,
+                status = excluded.status,
+                final_url = excluded.final_url,
+                redirect_count = excluded.redirect_count,
+                redirect_chain = excluded.redirect_chain,
+                response_time_ms = excluded.response_time_ms,
+                content_type = excluded.content_type,
+                content_length = excluded.content_length,
+                error_type = excluded.error_type,
+                error_message = excluded.error_message,
+                check_method = excluded.check_method,
+                browser_verified = excluded.browser_verified,
+                page_type = COALESCE(excluded.page_type, url_results.page_type),
+                business = COALESCE(excluded.business, url_results.business),
+                classification_method = COALESCE(excluded.classification_method, url_results.classification_method),
+                checked_at = excluded.checked_at
+        """
+
+        sql_dest = """
+            INSERT INTO job_destinations (
+                job_id, normalized_url, initial_status_code, final_status_code,
+                status, final_url, redirect_count, redirect_chain,
+                response_time_ms, content_type, content_length,
+                error_type, error_message, check_method, browser_verified,
+                checked_at, retries_count
+            ) VALUES (
+                :job_id, :normalized_url, :initial_status_code, :final_status_code,
+                :status, :final_url, :redirect_count, :redirect_chain,
+                :response_time_ms, :content_type, :content_length,
+                :error_type, :error_message, :check_method, :browser_verified,
+                :checked_at, :retries_count
+            )
+            ON CONFLICT(job_id, normalized_url) DO UPDATE SET
+                initial_status_code = excluded.initial_status_code,
+                final_status_code = excluded.final_status_code,
+                status = excluded.status,
+                final_url = excluded.final_url,
+                redirect_count = excluded.redirect_count,
+                redirect_chain = excluded.redirect_chain,
+                response_time_ms = excluded.response_time_ms,
+                content_type = excluded.content_type,
+                content_length = excluded.content_length,
+                error_type = excluded.error_type,
+                error_message = excluded.error_message,
+                check_method = excluded.check_method,
+                browser_verified = excluded.browser_verified,
+                checked_at = excluded.checked_at,
+                retries_count = excluded.retries_count
+        """
+
+        sql_extracted = """
+            INSERT INTO extracted_links (
+                job_id, batch_id, source_url, original_url, normalized_url,
+                anchor_text, component_name, image_name, loading_type, extracted_timestamp
+            ) VALUES (
+                :job_id, :batch_id, :source_url, :original_url, :normalized_url,
+                :anchor_text, :component_name, :image_name, :loading_type, :extracted_timestamp
+            )
+        """
+
+        clean_dest = []
+        if results:
+            for r in results:
+                clean_dest.append({
+                    "job_id": r.get("job_id", ""),
+                    "normalized_url": r.get("normalized_url", ""),
+                    "initial_status_code": r.get("initial_status_code"),
+                    "final_status_code": r.get("final_status_code"),
+                    "status": r.get("status", "Pending Validation"),
+                    "final_url": r.get("final_url", r.get("normalized_url", "")),
+                    "redirect_count": r.get("redirect_count", 0),
+                    "redirect_chain": r.get("redirect_chain", "[]"),
+                    "response_time_ms": r.get("response_time_ms", 0.0),
+                    "content_type": r.get("content_type", ""),
+                    "content_length": r.get("content_length", 0),
+                    "error_type": r.get("error_type", ""),
+                    "error_message": r.get("error_message", ""),
+                    "check_method": r.get("check_method", "HTTP"),
+                    "browser_verified": r.get("browser_verified", "NO"),
+                    "checked_at": r.get("checked_at"),
+                    "retries_count": r.get("retries_count", 0)
+                })
+
+        total_ops = (len(results) * 2 if results else 0) + (len(extracted) if extracted else 0)
+        max_retries = 5
+        base_delay = 0.1
+        for attempt in range(max_retries):
+            start_time = time.time()
+            try:
+                if results:
+                    await self.conn.executemany(sql_results, results)
+                    await self.conn.executemany(sql_dest, clean_dest)
+                if extracted:
+                    await self.conn.executemany(sql_extracted, extracted)
+                await self.conn.commit()
+                duration = time.time() - start_time
+                db_metrics.record_write(duration, total_ops)
+                return True
+            except aiosqlite.OperationalError as e:
+                try:
+                    await self.conn.rollback()
+                except Exception:
+                    pass
+                if "database is locked" in str(e).lower() or "busy" in str(e).lower():
+                    db_metrics.lock_errors += 1
+                    if attempt < max_retries - 1:
+                        db_metrics.retries += 1
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                        await asyncio.sleep(delay)
+                    else:
+                        db_metrics.exhausted_retries += 1
+                        db_metrics.failed_operations += total_ops
+                        raise
+                else:
+                    db_metrics.failed_operations += total_ops
+                    raise
+            except Exception as e:
+                try:
+                    await self.conn.rollback()
+                except Exception:
+                    pass
+                db_metrics.failed_operations += total_ops
+                raise
+
     async def batch_insert_image_results(self, results: List[Dict[str, Any]]):
         if not results: return
         sql = """
@@ -550,6 +738,17 @@ class Database:
         sql = "SELECT DISTINCT normalized_url FROM extracted_links WHERE job_id = ?"
         async with self.conn.execute(sql, (job_id,)) as cursor:
             return [row[0] for row in await cursor.fetchall()]
+
+    async def iter_unique_destinations_for_job(self, job_id: str, chunk_size: int = 5000):
+        """Streams unique destinations in bounded chunks to avoid loading 500k URLs into memory."""
+        sql = "SELECT DISTINCT normalized_url FROM extracted_links WHERE job_id = ?"
+        async with self.conn.execute(sql, (job_id,)) as cursor:
+            while True:
+                rows = await cursor.fetchmany(chunk_size)
+                if not rows:
+                    break
+                for row in rows:
+                    yield row[0]
 
     async def update_source_classification(
         self, source_url: str, page_type: str, business: str, method: str,
@@ -795,22 +994,49 @@ class Database:
             cols = [desc[0] for desc in cursor.description]
             rows = [dict(zip(cols, row)) for row in await cursor.fetchall()]
 
+        needed_sources = set()
+        row_src_map = []
         for row in rows:
-            src_list = (row.get("source_urls_concat") or "").split(",")
+            src_list = [s for s in (row.get("source_urls_concat") or "").split(",") if s]
+            needed_sources.update(src_list[:10])
+            row_src_map.append(src_list)
+
+        # Batch-fetch source classifications in chunks to eliminate N+1 queries
+        class_map = {}
+        if needed_sources:
+            source_list = list(needed_sources)
+            chunk_size = 500
+            for i in range(0, len(source_list), chunk_size):
+                chunk = source_list[i:i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                q = f"SELECT source_url, page_type, business FROM source_classifications WHERE source_url IN ({placeholders})"
+                async with self.conn.execute(q, chunk) as cur:
+                    for s_url, p_type, b_ness in await cur.fetchall():
+                        class_map[s_url] = {"page_type": p_type, "business": b_ness}
+
+        for row, src_list in zip(rows, row_src_map):
             pts = set()
             bizs = set()
             for s in src_list[:10]:
-                if s:
-                    sc = await self.get_source_classification(s)
-                    if sc:
-                        if sc.get("page_type"): pts.add(sc["page_type"])
-                        if sc.get("business"): bizs.add(sc["business"])
+                sc = class_map.get(s)
+                if sc:
+                    if sc.get("page_type"): pts.add(sc["page_type"])
+                    if sc.get("business"): bizs.add(sc["business"])
             row["source_page_type"] = ", ".join(sorted(pts)) if pts else "NEEDS_REVIEW"
             row["business"] = ", ".join(sorted(bizs)) if bizs else "NEEDS_REVIEW"
             row["source_pages_sample"] = ", ".join(src_list[:5])
         return rows
 
     async def get_link_audit_stats(self, job_id: str) -> Dict[str, Any]:
+        now = time.monotonic()
+        if not hasattr(self, "_link_stats_cache"):
+            self._link_stats_cache = {}
+        cached = self._link_stats_cache.get(job_id)
+        if cached:
+            cached_time, cached_val = cached
+            if now - cached_time < 1.5:
+                return dict(cached_val)
+
         sql_ext = """
             SELECT 
                 COUNT(*) as total_extracted,
@@ -856,27 +1082,6 @@ class Database:
         failures = val_stats.get("validation_failures") or 0
         retries = val_stats.get("total_retries") or 0
 
-        if unique_validated == 0 and total_unique > 0:
-            sql_fallback = """
-                SELECT 
-                    COUNT(DISTINCT e.normalized_url) as unique_validated,
-                    SUM(CASE WHEN r.final_status_code = 200 THEN 1 ELSE 0 END) as working,
-                    SUM(CASE WHEN r.status LIKE '%Broken%' OR r.final_status_code = 404 THEN 1 ELSE 0 END) as broken,
-                    SUM(CASE WHEN r.status LIKE '%Redirect%' OR (r.final_status_code >= 300 AND r.final_status_code <= 399) THEN 1 ELSE 0 END) as redirects,
-                    SUM(CASE WHEN r.final_status_code = 403 THEN 1 ELSE 0 END) as forbidden,
-                    SUM(CASE WHEN r.final_status_code >= 500 THEN 1 ELSE 0 END) as server_errors,
-                    SUM(CASE WHEN r.error_type IN ('Timeout', 'Connection Error', 'DNS Error', 'Network Error') THEN 1 ELSE 0 END) as network_failures
-                FROM extracted_links e
-                JOIN url_results r ON e.normalized_url = r.normalized_url
-                WHERE e.job_id = ?
-            """
-            async with self.conn.execute(sql_fallback, (job_id,)) as cur:
-                fb_row = dict(zip([d[0] for d in cur.description], await cur.fetchone()))
-                unique_validated = fb_row.get("unique_validated") or 0
-                working = fb_row.get("working") or 0
-                redirects = fb_row.get("redirects") or 0
-                failures = (fb_row.get("broken") or 0) + (fb_row.get("server_errors") or 0) + (fb_row.get("network_failures") or 0)
-
         pending = max(0, total_unique - unique_validated)
 
         async with self.conn.execute("SELECT created_at, updated_at FROM jobs WHERE id = ?", (job_id,)) as cur:
@@ -893,7 +1098,7 @@ class Database:
             except Exception:
                 pass
 
-        return {
+        result = {
             "total_extracted": total_extracted,
             "total_unique": total_unique,
             "duplicate_avoided": duplicate_avoided,
@@ -922,6 +1127,8 @@ class Database:
             "created_at": created_at,
             "updated_at": updated_at
         }
+        self._link_stats_cache[job_id] = (now, result)
+        return result
 
     async def get_overview_stats(self) -> Dict[str, Any]:
         sql = """
@@ -1000,39 +1207,75 @@ class Database:
 
         where_sql = " AND ".join(where_clauses)
 
-        count_sql = f"""
-            SELECT COUNT(*)
-            FROM extracted_links e
-            LEFT JOIN job_destinations d ON e.job_id = d.job_id AND e.normalized_url = d.normalized_url
-            WHERE {where_sql}
-        """
+        if status_filter:
+            count_sql = f"""
+                SELECT COUNT(*)
+                FROM extracted_links e
+                LEFT JOIN job_destinations d ON e.job_id = d.job_id AND e.normalized_url = d.normalized_url
+                WHERE {where_sql}
+            """
+        else:
+            count_sql = f"""
+                SELECT COUNT(*)
+                FROM extracted_links e
+                WHERE {where_sql}
+            """
         async with self.conn.execute(count_sql, tuple(params)) as cur:
             total_records = (await cur.fetchone())[0]
 
-        data_sql = f"""
-            SELECT 
-                e.id,
-                e.source_url,
-                e.original_url,
-                e.normalized_url,
-                e.anchor_text,
-                e.component_name,
-                sc.page_type as source_page_type,
-                sc.business as source_business,
-                d.final_status_code,
-                d.status as destination_status,
-                d.final_url,
-                d.redirect_count,
-                d.response_time_ms,
-                d.error_type
-            FROM extracted_links e
-            LEFT JOIN job_destinations d ON e.job_id = d.job_id AND e.normalized_url = d.normalized_url
-            LEFT JOIN source_classifications sc ON e.source_url = sc.source_url
-            WHERE {where_sql}
-            ORDER BY e.id ASC
-            LIMIT ? OFFSET ?
-        """
-        fetch_params = list(params) + [page_size, offset]
+        if not status_filter and not (query and query.strip()):
+            data_sql = """
+                SELECT 
+                    e.id,
+                    e.source_url,
+                    e.original_url,
+                    e.normalized_url,
+                    e.anchor_text,
+                    e.component_name,
+                    sc.page_type as source_page_type,
+                    sc.business as source_business,
+                    d.final_status_code,
+                    d.status as destination_status,
+                    d.final_url,
+                    d.redirect_count,
+                    d.response_time_ms,
+                    d.error_type
+                FROM (
+                    SELECT id, source_url, original_url, normalized_url, anchor_text, component_name, job_id
+                    FROM extracted_links
+                    WHERE job_id = ?
+                    ORDER BY id ASC
+                    LIMIT ? OFFSET ?
+                ) e
+                LEFT JOIN job_destinations d ON e.job_id = d.job_id AND e.normalized_url = d.normalized_url
+                LEFT JOIN source_classifications sc ON e.source_url = sc.source_url
+            """
+            fetch_params = [job_id, page_size, offset]
+        else:
+            data_sql = f"""
+                SELECT 
+                    e.id,
+                    e.source_url,
+                    e.original_url,
+                    e.normalized_url,
+                    e.anchor_text,
+                    e.component_name,
+                    sc.page_type as source_page_type,
+                    sc.business as source_business,
+                    d.final_status_code,
+                    d.status as destination_status,
+                    d.final_url,
+                    d.redirect_count,
+                    d.response_time_ms,
+                    d.error_type
+                FROM extracted_links e
+                LEFT JOIN job_destinations d ON e.job_id = d.job_id AND e.normalized_url = d.normalized_url
+                LEFT JOIN source_classifications sc ON e.source_url = sc.source_url
+                WHERE {where_sql}
+                ORDER BY e.id ASC
+                LIMIT ? OFFSET ?
+            """
+            fetch_params = list(params) + [page_size, offset]
         async with self.conn.execute(data_sql, tuple(fetch_params)) as cur:
             cols = [desc[0] for desc in cur.description]
             items = [dict(zip(cols, row)) for row in await cur.fetchall()]

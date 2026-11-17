@@ -130,13 +130,20 @@ class ReportGenerator:
 
         report_data = []
         if mode == "image_audit":
-            # Fetch image results
+            # Fetch image results in bulk
             res_map = {}
-            for link in extracted:
-                norm = link['normalized_url']
-                if norm not in res_map:
-                    cached = await self.db.get_cached_image_result(norm)
-                    res_map[norm] = cached or {}
+            unique_norms = list({l['normalized_url'] for l in extracted if l.get('normalized_url')})
+            if unique_norms:
+                chunk_size = 500
+                for i in range(0, len(unique_norms), chunk_size):
+                    chunk = unique_norms[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    q = f"SELECT * FROM image_results WHERE normalized_url IN ({placeholders})"
+                    async with self.db.conn.execute(q, chunk) as cur:
+                        cols = [desc[0] for desc in cur.description]
+                        for row in await cur.fetchall():
+                            r_dict = dict(zip(cols, row))
+                            res_map[r_dict["normalized_url"]] = r_dict
                     
             for link in extracted:
                 norm = link['normalized_url']
@@ -160,18 +167,34 @@ class ReportGenerator:
                     "checked_timestamp": cached.get("checked_at", "")
                 })
         else:
-            # link_audit
+            # link_audit bulk lookups
             res_map = {}
+            unique_norms = list({l['normalized_url'] for l in extracted if l.get('normalized_url')})
+            if unique_norms:
+                chunk_size = 500
+                for i in range(0, len(unique_norms), chunk_size):
+                    chunk = unique_norms[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    q = f"SELECT * FROM url_results WHERE normalized_url IN ({placeholders})"
+                    async with self.db.conn.execute(q, chunk) as cur:
+                        cols = [desc[0] for desc in cur.description]
+                        for row in await cur.fetchall():
+                            r_dict = dict(zip(cols, row))
+                            res_map[r_dict["normalized_url"]] = r_dict
+
             source_class_map = {}
-            for link in extracted:
-                norm = link['normalized_url']
-                source_url = link.get("source_url", "N/A")
-                if norm not in res_map:
-                    cached = await self.db.get_cached_result(norm)
-                    res_map[norm] = cached or {}
-                if source_url != "N/A" and source_url not in source_class_map:
-                    source_class = await self.db.get_source_classification(source_url)
-                    source_class_map[source_url] = source_class or {}
+            unique_sources = list({l.get("source_url") for l in extracted if l.get("source_url") and l.get("source_url") != "N/A"})
+            if unique_sources:
+                chunk_size = 500
+                for i in range(0, len(unique_sources), chunk_size):
+                    chunk = unique_sources[i:i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    q = f"SELECT * FROM source_classifications WHERE source_url IN ({placeholders})"
+                    async with self.db.conn.execute(q, chunk) as cur:
+                        cols = [desc[0] for desc in cur.description]
+                        for row in await cur.fetchall():
+                            sc_dict = dict(zip(cols, row))
+                            source_class_map[sc_dict["source_url"]] = sc_dict
                     
             for i, link in enumerate(extracted, 1):
                 norm = link['normalized_url']
@@ -265,21 +288,34 @@ class ReportGenerator:
         dest_list = await self.db.get_job_destinations(job_id)
         dest_map = {d["normalized_url"]: d for d in dest_list}
 
-        # Fallback to cached url_results if not present in job_destinations
-        for link in extracted:
-            norm = link['normalized_url']
-            if norm not in dest_map:
-                cached = await self.db.get_cached_result(norm)
-                if cached:
-                    dest_map[norm] = cached
+        # Fallback to cached url_results in bulk if not present in job_destinations
+        missing_norms = list({l['normalized_url'] for l in extracted if l.get('normalized_url') and l['normalized_url'] not in dest_map})
+        if missing_norms:
+            chunk_size = 500
+            for i in range(0, len(missing_norms), chunk_size):
+                chunk = missing_norms[i:i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                q = f"SELECT * FROM url_results WHERE normalized_url IN ({placeholders})"
+                async with self.db.conn.execute(q, chunk) as cur:
+                    cols = [desc[0] for desc in cur.description]
+                    for row in await cur.fetchall():
+                        r_dict = dict(zip(cols, row))
+                        dest_map[r_dict["normalized_url"]] = r_dict
 
-        # 3. Fetch source classifications
-        source_urls = list(set([l.get("source_url") for l in extracted if l.get("source_url") and l.get("source_url") != "N/A"]))
+        # 3. Fetch source classifications in bulk
+        source_urls = list({l.get("source_url") for l in extracted if l.get("source_url") and l.get("source_url") != "N/A"})
         source_class_map = {}
-        for s in source_urls:
-            sc = await self.db.get_source_classification(s)
-            if sc:
-                source_class_map[s] = sc
+        if source_urls:
+            chunk_size = 500
+            for i in range(0, len(source_urls), chunk_size):
+                chunk = source_urls[i:i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                q = f"SELECT * FROM source_classifications WHERE source_url IN ({placeholders})"
+                async with self.db.conn.execute(q, chunk) as cur:
+                    cols = [desc[0] for desc in cur.description]
+                    for row in await cur.fetchall():
+                        sc_dict = dict(zip(cols, row))
+                        source_class_map[sc_dict["source_url"]] = sc_dict
 
         if not extracted:
             wb = openpyxl.Workbook()

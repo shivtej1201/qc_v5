@@ -168,8 +168,12 @@ async def start_jobs(upload_id: str, req: StartJobsRequest):
             detail=f"Selected sheets contain {selected_counts} URLs, which exceeds the limit of {max_records} URLs per job."
         )
 
-    await job_manager.create_jobs_for_sheets(upload_id, filepath, req.mode, req.sheets, req.force_recheck)
-    return {"message": "Jobs created and queued successfully"}
+    jobs = await job_manager.create_jobs_for_sheets(upload_id, filepath, req.mode, req.sheets, req.force_recheck)
+    return {
+        "message": "Jobs created and queued successfully",
+        "jobs": jobs or [],
+        "job_ids": [j["id"] for j in jobs] if jobs else []
+    }
 
 @app.get("/api/uploads/{upload_id}/jobs")
 async def get_upload_jobs(upload_id: str):
@@ -291,18 +295,21 @@ async def get_api_audit_results(job_id: str):
 
 @app.get("/api/jobs/{job_id}/stats")
 async def get_job_stats(job_id: str):
-    # Fetch mode
-    async with db.conn.execute("SELECT u.mode, j.created_at, j.updated_at, j.status FROM jobs j JOIN uploads u ON j.upload_id = u.id WHERE j.id = ?", (job_id,)) as cur:
+    # Fetch mode and job metadata
+    async with db.conn.execute("SELECT u.mode, j.created_at, j.updated_at, j.status, j.processed_records, j.total_records FROM jobs j JOIN uploads u ON j.upload_id = u.id WHERE j.id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
         if not row: raise HTTPException(404, "Job not found")
-        mode, created_at, updated_at, status = row
+        mode, created_at, updated_at, status, processed_records, total_records = row
         
     if mode == "api_response_audit":
         stats = await db.get_api_audit_stats(job_id)
+        stats['job_id'] = job_id
         stats['mode'] = mode
         stats['created_at'] = created_at
         stats['updated_at'] = updated_at
         stats['status'] = status
+        stats['processed_records'] = processed_records
+        stats['total_records'] = total_records
         return stats
 
     if mode == "link_audit":
@@ -311,10 +318,13 @@ async def get_job_stats(job_id: str):
             live = daemon.link_validator.get_live_stats(job_id)
             if live:
                 stats.update(live)
+        stats['job_id'] = job_id
         stats['mode'] = mode
         stats['created_at'] = created_at
         stats['updated_at'] = updated_at
         stats['status'] = status
+        stats['processed_records'] = processed_records
+        stats['total_records'] = total_records
         return stats
 
     table = "image_results" if mode == "image_audit" else "url_results"
@@ -341,10 +351,13 @@ async def get_job_stats(job_id: str):
         cols = [desc[0] for desc in cur.description]
         stats = dict(zip(cols, await cur.fetchone()))
         
+    stats['job_id'] = job_id
     stats['mode'] = mode
     stats['created_at'] = created_at
     stats['updated_at'] = updated_at
     stats['status'] = status
+    stats['processed_records'] = processed_records
+    stats['total_records'] = total_records
     return stats
 
 @app.get("/api/jobs/{job_id}/non-200-results")
@@ -610,7 +623,9 @@ async def _execute_sitemap_extraction(import_id: str, urls: List[str], file_byte
         max_urls=getattr(settings, "SITEMAP_MAX_URLS", 50000),
         timeout=getattr(settings, "SITEMAP_TIMEOUT", 15.0),
         concurrency=getattr(settings, "SITEMAP_CONCURRENCY", 5),
-        allow_local=allow_local
+        allow_local=allow_local,
+        browser_pool=getattr(daemon, "browser_pool", None),
+        use_browser_fallback=True
     )
     try:
         await db.update_sitemap_import(import_id, status="EXTRACTING")

@@ -289,10 +289,10 @@ class TestPhase10121SitemapProductionAcceptance(unittest.IsolatedAsyncioTestCase
 
         # 4. Redirect hop leading to private destination
         redirect_routes = {
-            "https://public-entry.com/sitemap.xml": (302, {"Location": "http://127.0.0.1:8000/internal.xml"}, b"")
+            "https://example.com/sitemap.xml": (302, {"Location": "http://127.0.0.1:8000/internal.xml"}, b"")
         }
         extractor.client._transport = MockTransport(redirect_routes)
-        _, status4, _, chain4, diag4 = await extractor._safe_fetch("https://public-entry.com/sitemap.xml")
+        _, status4, _, chain4, diag4 = await extractor._safe_fetch("https://example.com/sitemap.xml")
         self.assertEqual(status4, 403)
         self.assertEqual(diag4["classification"], "REDIRECT_REJECTED")
         self.assertTrue(len(chain4) >= 1)

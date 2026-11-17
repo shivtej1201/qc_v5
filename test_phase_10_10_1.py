@@ -23,6 +23,10 @@ class TestPhase10101AcceptanceAndWakeLockVerification(unittest.IsolatedAsyncioTe
         from server import daemon
         if daemon:
             daemon.active = False
+        if db.conn:
+            await db.conn.execute("DELETE FROM batches WHERE job_id LIKE 'job_ov_%' OR job_id LIKE 'job_p10101_%'")
+            await db.conn.execute("DELETE FROM jobs WHERE id LIKE 'job_ov_%' OR id LIKE 'job_p10101_%'")
+            await db.conn.commit()
 
     async def test_01_overview_endpoint_aggregation_and_mode_distribution(self):
         """Verify GET /api/overview accurately aggregates all active/terminal statuses, denominators, and modes."""

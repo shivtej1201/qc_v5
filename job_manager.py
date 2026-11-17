@@ -136,6 +136,7 @@ class JobManager:
             else:
                 await self.db.conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         await self.db.conn.commit()
+        return await self.get_jobs_for_upload(upload_id)
 
     async def create_job_from_sitemap(
         self,
@@ -321,7 +322,7 @@ class JobManager:
                         new_status = 'COMPLETED'
                 await self.db.conn.execute("UPDATE jobs SET status = ?, processed_records = ?, updated_at = ? WHERE id = ?", (new_status, total_processed, now, job_id))
             else:
-                await self.db.conn.execute("UPDATE jobs SET processed_records = ?, updated_at = ? WHERE id = ?", (total_processed, now, job_id))
+                await self.db.conn.execute("UPDATE jobs SET status = CASE WHEN status = 'QUEUED' THEN 'RUNNING' ELSE status END, processed_records = ?, updated_at = ? WHERE id = ?", (total_processed, now, job_id))
         
         await self.db.conn.commit()
 
@@ -385,6 +386,26 @@ class JobManager:
                     await self.db.conn.execute(
                         "UPDATE jobs SET status = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
                         (status, now, job_id)
+                    )
+                    if status == 'CANCELLED':
+                        await self.db.conn.execute(
+                            "UPDATE batches SET status = 'CANCELLED', updated_at = ?, lease_expires_at = NULL WHERE job_id = ? AND status IN ('QUEUED', 'RUNNING')",
+                            (now, job_id)
+                        )
+                    elif status == 'PAUSED':
+                        await self.db.conn.execute(
+                            "UPDATE batches SET status = 'PAUSED', updated_at = ?, lease_expires_at = NULL WHERE job_id = ? AND status IN ('QUEUED', 'RUNNING')",
+                            (now, job_id)
+                        )
+                elif status == 'QUEUED':
+                    # Resuming paused job
+                    await self.db.conn.execute(
+                        "UPDATE jobs SET status = 'QUEUED', worker_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+                        (now, job_id)
+                    )
+                    await self.db.conn.execute(
+                        "UPDATE batches SET status = 'QUEUED', worker_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE job_id = ? AND status = 'PAUSED'",
+                        (now, job_id)
                     )
                 else:
                     await self.db.conn.execute(

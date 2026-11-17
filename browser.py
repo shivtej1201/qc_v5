@@ -13,7 +13,11 @@ class BrowserPool:
     async def start(self):
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(headless=True)
-        self.context = await self.browser.new_context(ignore_https_errors=True, service_workers="block")
+        self.context = await self.browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            ignore_https_errors=True,
+            service_workers="block"
+        )
         for _ in range(settings.BROWSER_CONCURRENCY):
             page = await self.context.new_page()
             self.pages.append(page)

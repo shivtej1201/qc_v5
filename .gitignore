@@ -12,3 +12,4 @@ batches/
 artifacts/
 *.xlsx
 .env
+scratch/

@@ -33,7 +33,7 @@ class Parser(HTMLParser):
         return candidates[0] if candidates else ""
         
     def handle_starttag(self, tag, attrs):
-        attr_dict = {k.lower(): (v if v is not None else "") for k, v in attrs if k}
+        attr_dict = {k.lower(): (v.lower() if k.lower() in ('class', 'id', 'name', 'rel') and isinstance(v, str) else (v if v is not None else "")) for k, v in attrs if k}
         self.path.append((tag, attr_dict))
         
         if tag == 'head':
@@ -48,32 +48,33 @@ class Parser(HTMLParser):
                 
         elif tag == 'meta':
             self.meta_tags.append(attr_dict)
-            name = attr_dict.get('name', '').lower()
+            name = attr_dict.get('name', '')
             if name == 'description':
                 self.meta_desc = attr_dict.get('content', '')
                 
         elif tag == 'link':
-            rel = attr_dict.get('rel', '').lower()
+            rel = attr_dict.get('rel', '')
             if rel == 'canonical':
                 self.canonical = attr_dict.get('href', '')
                 
-        for k, v in attrs:
-            if k.lower() == 'data-pagetype' and v and v.strip():
-                val = v.strip()
-                in_header = any(p[0] == 'header' for p in self.path)
-                if in_header:
-                    self.header_data_pagetypes.append(val)
-                else:
-                    self.content_data_pagetypes.append(val)
+        dpt = attr_dict.get('data-pagetype')
+        if dpt and str(dpt).strip():
+            val = str(dpt).strip()
+            in_header = any(p[0] == 'header' for p in self.path)
+            if in_header:
+                self.header_data_pagetypes.append(val)
+            else:
+                self.content_data_pagetypes.append(val)
                     
         if tag == 'a':
             href = attr_dict.get('href')
             if href:
+                comp = self._identify_component()
                 self.current_anchor = {
                     'href': href,
                     'text': '',
-                    'component': self._identify_component(),
-                    'container_type': self._identify_container_type()
+                    'component': comp,
+                    'container_type': self._identify_container_type(comp)
                 }
                 
         elif tag == 'img':
@@ -90,13 +91,14 @@ class Parser(HTMLParser):
                 if 'data-src' in attr_dict or 'data-lazy-src' in attr_dict:
                     loading = 'lazy'
                     
+                comp = self._identify_component()
                 self.images.append({
                     'url': src,
                     'alt': alt,
                     'title': title_attr,
                     'loading_type': loading,
-                    'component': self._identify_component(),
-                    'container_type': self._identify_container_type()
+                    'component': comp,
+                    'container_type': self._identify_container_type(comp)
                 })
                 
     def handle_endtag(self, tag):
@@ -122,22 +124,23 @@ class Parser(HTMLParser):
         for tag, attrs in reversed(self.path):
             if tag in self.ignored_elements:
                 return 'Header/Footer'
-            classes = attrs.get('class', '').lower()
-            id_str = attrs.get('id', '').lower()
+            classes = attrs.get('class', '')
+            id_str = attrs.get('id', '')
             if 'modal' in classes or 'modal' in id_str:
                 return 'Header/Footer'
         return 'Content Section'
         
-    def _identify_container_type(self):
+    def _identify_container_type(self, comp: str = None):
         # returns 'ignored', 'preferred', or 'body'
-        comp = self._identify_component()
+        if comp is None:
+            comp = self._identify_component()
         if comp == 'Header/Footer':
             return 'ignored'
         for tag, attrs in self.path:
             if tag in self.preferred_selectors:
                 return 'preferred'
-            classes = attrs.get('class', '').lower()
-            id_str = attrs.get('id', '').lower()
+            classes = attrs.get('class', '')
+            id_str = attrs.get('id', '')
             if 'main' in classes or 'main' in id_str or 'content' in classes or 'content' in id_str:
                 return 'preferred'
             if attrs.get('role') == 'main':

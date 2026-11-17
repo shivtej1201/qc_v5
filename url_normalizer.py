@@ -52,7 +52,7 @@ def _is_prohibited_ip(ip: Union[ipaddress.IPv4Address, ipaddress.IPv6Address], a
                 return True
     return False
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=32768)
 def _resolve_and_check_hostname(hostname: str, allow_local: bool = False) -> bool:
     if not hostname:
         return False
