@@ -15,6 +15,7 @@ from classifier import Classifier
 from api_observer import ApiResponseObserver
 from link_validator import LinkValidator
 from diagnostics_403 import Diagnostics403
+from status_classifier import classify_outcome
 
 class BatchWorkerDaemon:
     def __init__(self, worker_id: str = None, worker_count: int = None, db: Database = None, jm: JobManager = None):
@@ -143,6 +144,10 @@ class BatchWorkerDaemon:
 
     async def _process_batch_task(self, batch):
         try:
+            if batch['mode'] == "url_status" and await self.db.job_has_url_items(batch['job_id']):
+                done = await self._process_url_status_batch(batch)
+                await self.jm.update_batch_progress(batch['id'], done, "COMPLETED")
+                return
             await self._process_batch(batch)
             if batch['mode'] in ["link_audit", "image_audit"]:
                 await self.http_queue.join()
@@ -150,6 +155,128 @@ class BatchWorkerDaemon:
         except Exception as e:
             print(f"Batch failed: {e}")
             await self.jm.update_batch_progress(batch['id'], 0, "FAILED", str(e))
+
+    # ------------------------------------------------------------------------------------------
+    # URL-status audit (ledger-backed): every submitted URL ends with a result or explicit reason
+    # ------------------------------------------------------------------------------------------
+    URL_STATUS_FLUSH_EVERY = 100
+
+    @staticmethod
+    def _ledger_record(row_no: int, norm: str, source: str, r: dict) -> dict:
+        outcome, validated = classify_outcome(
+            r.get("final_status_code"), r.get("initial_status_code"), r.get("redirect_count") or 0,
+            r.get("error_type") or "", r.get("browser_verified") or "NO",
+        )
+        return {
+            "row_no": row_no, "normalized_url": norm, "validation_source": source,
+            "outcome": outcome, "validated": validated, "status": r.get("status"),
+            "initial_status_code": r.get("initial_status_code"), "final_status_code": r.get("final_status_code"),
+            "final_url": r.get("final_url"), "redirect_count": r.get("redirect_count") or 0,
+            "redirect_chain": r.get("redirect_chain") or "[]", "response_time_ms": r.get("response_time_ms"),
+            "content_type": r.get("content_type") or "", "error_type": r.get("error_type") or "",
+            "error_message": (r.get("error_message") or "")[:500], "check_method": r.get("check_method") or "",
+            "attempts": r.get("attempts") or 0, "checked_at": r.get("checked_at") or datetime.utcnow().isoformat() + "Z",
+        }
+
+    @staticmethod
+    def _unvalidated_result(norm: str, error_type: str, message: str, method: str) -> dict:
+        return {"normalized_url": norm, "status": error_type, "error_type": error_type, "error_message": message,
+                "check_method": method, "final_status_code": None, "attempts": 0,
+                "checked_at": datetime.utcnow().isoformat() + "Z"}
+
+    async def _process_url_status_batch(self, batch) -> int:
+        job_id, batch_id = batch['job_id'], batch['id']
+        force_recheck = bool(batch.get('force_recheck'))
+        allow_local = getattr(settings, "ALLOW_LOCAL_TESTING", False)
+        items = await self.db.get_pending_url_items_for_batch(job_id, batch_id)   # resume: PENDING rows only
+        reusable = {} if force_recheck else await self.db.get_reusable_results_bulk(
+            list({n for _, _, n in items if n}))
+
+        buf_items: list = []
+        buf_cache: list = []
+        flush_lock = asyncio.Lock()
+
+        async def flush():
+            nonlocal buf_items, buf_cache
+            async with flush_lock:
+                if not buf_items:
+                    return
+                its, cache = buf_items, buf_cache
+                buf_items, buf_cache = [], []
+                await self.db.record_url_item_results(job_id, its, cache)
+                done = await self.db.count_url_items_done_in_batch(job_id, batch_id)
+                await self.jm.update_batch_progress(batch_id, done)   # also renews the batch lease
+
+        async def validate_one(row_no: int, original: str, norm: str):
+            try:
+                cached = reusable.get(norm)
+                if cached is not None:
+                    rec = self._ledger_record(row_no, norm, "CACHED", cached)
+                    cache_row = None
+                else:
+                    safety = await asyncio.to_thread(URLNormalizer.classify_url_safety, norm, allow_local)
+                    if safety == "INVALID_URL":
+                        r = self._unvalidated_result(norm, "Invalid URL", "Not a valid absolute http(s) URL; not requested", "SYNTAX_CHECK")
+                        rec, cache_row = self._ledger_record(row_no, norm, "NOT_VALIDATED", r), None
+                    elif safety == "DNS_ERROR":
+                        r = self._unvalidated_result(norm, "DNS Error", "Hostname could not be resolved (DNS failure); not requested", "DNS_PREFLIGHT")
+                        rec, cache_row = self._ledger_record(row_no, norm, "NEW_CHECK", r), None
+                    elif safety == "BLOCKED_SSRF":
+                        r = self._unvalidated_result(norm, "Blocked (SSRF)", "Destination resolves to a prohibited address; not requested", "SSRF_FILTER")
+                        rec, cache_row = self._ledger_record(row_no, norm, "NOT_VALIDATED", r), None
+                    else:
+                        res = await self.checker.check(norm)
+                        d = res.to_db_dict()
+                        rec = self._ledger_record(row_no, norm, "NEW_CHECK", d)
+                        cache_row = {k: v for k, v in d.items() if k != "attempts"}
+            except Exception as e:
+                # Failure isolation: one URL's unexpected error is recorded, never propagated
+                r = self._unvalidated_result(norm, "Validation Error", f"{e.__class__.__name__}: {e}"[:500], "HTTP")
+                rec, cache_row = self._ledger_record(row_no, norm, "NEW_CHECK", r), None
+            buf_items.append(rec)
+            if cache_row is not None:
+                buf_cache.append(cache_row)
+            if len(buf_items) >= self.URL_STATUS_FLUSH_EVERY:
+                await flush()
+
+        sem = asyncio.Semaphore(max(1, settings.HTTP_CONCURRENCY))
+
+        async def bounded(item):
+            async with sem:
+                await validate_one(*item)
+
+        async def heartbeat():
+            # keep the batch lease alive while slow URLs (timeouts/retries) are in flight, so no
+            # other worker re-claims this batch and validates the same URLs a second time
+            interval = max(5.0, getattr(settings, 'BATCH_LEASE_DURATION_SEC', 60) / 3.0)
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    done = await self.db.count_url_items_done_in_batch(job_id, batch_id)
+                    await self.jm.update_batch_progress(batch_id, done)
+                except Exception as hb_err:
+                    print(f"[url_status] lease heartbeat failed for batch {batch_id}: {hb_err}")
+
+        hb = asyncio.create_task(heartbeat())
+        tasks = [asyncio.create_task(bounded(it)) for it in items]
+        try:
+            if tasks:
+                done_t, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+                for t in done_t:
+                    if t.exception() is not None:
+                        raise t.exception()   # e.g. persistent DB failure -> batch FAILED, rows stay PENDING
+            await flush()
+        finally:
+            hb.cancel()
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+
+        # Batch is complete only when none of its unique rows is still PENDING (no silent loss)
+        left = await self.db.get_pending_url_items_for_batch(job_id, batch_id)
+        if left:
+            raise RuntimeError(f"{len(left)} URLs in batch {batch_id} still have no result")
+        return await self.db.count_url_items_done_in_batch(job_id, batch_id)
 
     async def _process_batch(self, batch):
         mode = batch['mode']

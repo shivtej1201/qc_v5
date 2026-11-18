@@ -1,0 +1,100 @@
+[PIPELINE] Pending source pages: 10,000 | resumed PENDING destinations: 0
+[READY] Primary edge open (http://127.0.0.1:8841/robots.txt -> 200 on probe #1)
+[PIPELINE] Sources 75/10,000 (7.2 pg/s) | Rels 2,762 | Dest 151/1,609 (http 76) | rps 14.05/14.0 | cooldowns 0
+[PIPELINE] Sources 146/10,000 (7.0 pg/s) | Rels 5,387 | Dest 294/2,895 (http 148) | rps 13.99/14.0 | cooldowns 0
+[PIPELINE] Sources 220/10,000 (7.1 pg/s) | Rels 8,122 | Dest 437/4,026 (http 217) | rps 13.98/14.0 | cooldowns 0
+[PIPELINE] Sources 293/10,000 (7.1 pg/s) | Rels 10,822 | Dest 583/4,989 (http 290) | rps 13.99/14.0 | cooldowns 0
+[PIPELINE] Sources 363/10,000 (7.0 pg/s) | Rels 13,408 | Dest 722/5,765 (http 359) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 437/10,000 (7.0 pg/s) | Rels 16,140 | Dest 865/6,468 (http 428) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 508/10,000 (7.0 pg/s) | Rels 18,765 | Dest 1,007/7,018 (http 499) | rps 13.99/14.0 | cooldowns 0
+[PIPELINE] Sources 613/10,000 (7.4 pg/s) | Rels 22,649 | Dest 1,149/7,723 (http 536) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 734/10,000 (7.8 pg/s) | Rels 27,117 | Dest 1,298/8,378 (http 564) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 862/10,000 (8.2 pg/s) | Rels 31,852 | Dest 1,444/8,894 (http 582) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 996/10,000 (8.6 pg/s) | Rels 36,805 | Dest 1,590/9,317 (http 594) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 1,119/10,000 (8.9 pg/s) | Rels 41,350 | Dest 1,731/9,641 (http 612) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 1,265/10,000 (9.3 pg/s) | Rels 46,747 | Dest 1,883/9,917 (http 618) | rps 14.02/14.0 | cooldowns 0
+[PIPELINE] Sources 1,404/10,000 (9.6 pg/s) | Rels 51,882 | Dest 2,026/10,091 (http 622) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 1,551/10,000 (9.8 pg/s) | Rels 57,314 | Dest 2,175/10,248 (http 624) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 1,692/10,000 (10.1 pg/s) | Rels 62,526 | Dest 2,316/10,360 (http 624) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 1,839/10,000 (10.3 pg/s) | Rels 67,956 | Dest 2,465/10,418 (http 625) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 1,984/10,000 (10.5 pg/s) | Rels 73,312 | Dest 2,609/10,464 (http 625) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 2,121/10,000 (10.7 pg/s) | Rels 78,374 | Dest 2,746/10,502 (http 625) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 2,259/10,000 (10.8 pg/s) | Rels 83,478 | Dest 2,886/10,527 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 2,416/10,000 (11.0 pg/s) | Rels 89,281 | Dest 3,042/10,555 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 2,561/10,000 (11.1 pg/s) | Rels 94,633 | Dest 3,187/10,566 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 2,706/10,000 (11.2 pg/s) | Rels 99,990 | Dest 3,332/10,586 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 2,848/10,000 (11.3 pg/s) | Rels 105,234 | Dest 3,474/10,596 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 2,985/10,000 (11.4 pg/s) | Rels 110,300 | Dest 3,612/10,605 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 3,143/10,000 (11.5 pg/s) | Rels 116,143 | Dest 3,770/10,613 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 3,292/10,000 (11.6 pg/s) | Rels 121,649 | Dest 3,918/10,619 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 3,438/10,000 (11.7 pg/s) | Rels 127,042 | Dest 4,065/10,621 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 3,593/10,000 (11.8 pg/s) | Rels 132,767 | Dest 4,219/10,621 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 3,743/10,000 (11.8 pg/s) | Rels 138,312 | Dest 4,370/10,623 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 3,900/10,000 (11.9 pg/s) | Rels 144,116 | Dest 4,526/10,623 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 4,049/10,000 (12.0 pg/s) | Rels 149,621 | Dest 4,676/10,623 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 4,204/10,000 (12.1 pg/s) | Rels 155,348 | Dest 4,831/10,623 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 4,355/10,000 (12.1 pg/s) | Rels 160,930 | Dest 4,981/10,625 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 4,510/10,000 (12.2 pg/s) | Rels 166,655 | Dest 5,136/10,625 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 4,651/10,000 (12.2 pg/s) | Rels 171,866 | Dest 5,278/10,625 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 4,806/10,000 (12.2 pg/s) | Rels 177,598 | Dest 5,432/10,625 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 4,953/10,000 (12.3 pg/s) | Rels 183,027 | Dest 5,579/10,625 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 5,106/10,000 (12.3 pg/s) | Rels 188,682 | Dest 5,732/10,625 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 5,249/10,000 (12.4 pg/s) | Rels 193,963 | Dest 5,876/10,626 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 5,401/10,000 (12.4 pg/s) | Rels 199,580 | Dest 6,028/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 5,543/10,000 (12.4 pg/s) | Rels 204,828 | Dest 6,169/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 5,684/10,000 (12.5 pg/s) | Rels 210,040 | Dest 6,310/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 5,834/10,000 (12.5 pg/s) | Rels 215,579 | Dest 6,461/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 5,990/10,000 (12.5 pg/s) | Rels 221,341 | Dest 6,616/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 6,144/10,000 (12.6 pg/s) | Rels 227,036 | Dest 6,770/10,626 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 6,284/10,000 (12.6 pg/s) | Rels 232,207 | Dest 6,910/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 6,424/10,000 (12.6 pg/s) | Rels 237,377 | Dest 7,051/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 6,565/10,000 (12.6 pg/s) | Rels 242,588 | Dest 7,191/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 6,711/10,000 (12.7 pg/s) | Rels 247,979 | Dest 7,337/10,626 (http 626) | rps 14.02/14.0 | cooldowns 0
+[PIPELINE] Sources 6,855/10,000 (12.7 pg/s) | Rels 253,301 | Dest 7,481/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 6,994/10,000 (12.7 pg/s) | Rels 258,440 | Dest 7,621/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 7,138/10,000 (12.7 pg/s) | Rels 263,761 | Dest 7,765/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 7,290/10,000 (12.8 pg/s) | Rels 269,380 | Dest 7,916/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 7,440/10,000 (12.8 pg/s) | Rels 274,923 | Dest 8,067/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 7,585/10,000 (12.8 pg/s) | Rels 280,284 | Dest 8,211/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 7,737/10,000 (12.8 pg/s) | Rels 285,901 | Dest 8,364/10,626 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 7,877/10,000 (12.8 pg/s) | Rels 291,072 | Dest 8,503/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 8,015/10,000 (12.8 pg/s) | Rels 296,168 | Dest 8,641/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 8,157/10,000 (12.9 pg/s) | Rels 301,416 | Dest 8,783/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 8,308/10,000 (12.9 pg/s) | Rels 306,997 | Dest 8,934/10,626 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 8,464/10,000 (12.9 pg/s) | Rels 312,760 | Dest 9,091/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 8,616/10,000 (12.9 pg/s) | Rels 318,379 | Dest 9,243/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 8,766/10,000 (12.9 pg/s) | Rels 323,922 | Dest 9,392/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 8,913/10,000 (12.9 pg/s) | Rels 329,356 | Dest 9,539/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 9,062/10,000 (13.0 pg/s) | Rels 334,861 | Dest 9,689/10,626 (http 626) | rps 14.01/14.0 | cooldowns 0
+[PIPELINE] Sources 9,211/10,000 (13.0 pg/s) | Rels 340,370 | Dest 9,837/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 9,364/10,000 (13.0 pg/s) | Rels 346,023 | Dest 9,990/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 9,521/10,000 (13.0 pg/s) | Rels 351,829 | Dest 10,147/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 9,669/10,000 (13.0 pg/s) | Rels 357,292 | Dest 10,295/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 9,809/10,000 (13.0 pg/s) | Rels 362,466 | Dest 10,436/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+[PIPELINE] Sources 9,953/10,000 (13.0 pg/s) | Rels 367,786 | Dest 10,579/10,626 (http 626) | rps 14.00/14.0 | cooldowns 0
+{
+ "final_qc_status": "PASS",
+ "crawl_seconds": 768.9,
+ "package_seconds": 18.1,
+ "pages_per_sec": 13.01,
+ "primary_rps": 13.99,
+ "total_rps": 92.3,
+ "url_val": 626,
+ "img_val": 60319,
+ "waf_events": 0,
+ "403": 0,
+ "429": 0,
+ "timeouts": 0,
+ "cooldowns": 0,
+ "rss_peak_mb": 225.8,
+ "server_kind": {
+  "robots": 4,
+  "source_page": 10015,
+  "cdn_image": 60215,
+  "external": 26,
+  "extra_dest": 612,
+  "primary_image": 104
+ },
+ "server_dups": 27,
+ "max_inflight": 19
+}

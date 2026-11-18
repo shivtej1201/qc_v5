@@ -226,7 +226,45 @@ class ReportGenerator:
         self._write_table_sheet(ws, df)
         wb.save(output_file)
 
+    URL_STATUS_EXPORT_COLUMNS = [
+        "row_no", "original_url", "normalized_url", "item_state", "outcome", "validated", "status",
+        "initial_status_code", "final_status_code", "final_url", "redirect_count", "error_type",
+        "error_message", "validation_source", "duplicate_of_row", "attempts", "response_time_ms",
+        "content_type", "check_method", "checked_at",
+    ]
+
     async def _write_url_status_report(self, job_id: str, output_file: str):
+        if await self.db.job_has_url_items(job_id):
+            return await self._write_url_status_ledger_report(job_id, output_file)
+        return await self._write_url_status_legacy_report(job_id, output_file)
+
+    async def _write_url_status_ledger_report(self, job_id: str, output_file: str):
+        """One row per SUBMITTED URL, in submission order (duplicates and invalid entries included,
+        each with its own result or explicit reason). Streams rows: bounded memory at 125K+."""
+        cols = self.URL_STATUS_EXPORT_COLUMNS
+        counts = await self.db.get_url_status_counts(job_id) or {}
+        workbook = openpyxl.Workbook(write_only=True)
+        ws = workbook.create_sheet(title="URL Status")
+        ws.append(cols)
+        n = 0
+        async for item in self.db.iter_job_url_items(job_id):
+            ws.append([sanitize_cell_for_export(item.get(c)) for c in cols])
+            n += 1
+        summary = workbook.create_sheet(title="Summary")
+        summary.append(["Metric", "Value"])
+        for key in ("total_urls", "processed_urls", "pending_urls", "successfully_validated_urls",
+                    "failed_validations", "duplicate_urls", "invalid_urls", "unique_urls",
+                    "new_http_checks", "reused_from_cache"):
+            summary.append([key, counts.get(key, 0)])
+        summary.append(["rows_in_url_status_sheet", n])
+        summary.append(["reconciled (rows == total_urls)", "PASS" if n == counts.get("total_urls") else "FAIL"])
+        summary.append([])
+        summary.append(["Outcome", "URLs"])
+        for oc, cnt in sorted((counts.get("by_outcome") or {}).items()):
+            summary.append([oc, cnt])
+        workbook.save(output_file)
+
+    async def _write_url_status_legacy_report(self, job_id: str, output_file: str):
         import json
 
         url_columns = [

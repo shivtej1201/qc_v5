@@ -218,7 +218,7 @@ async def download_report(job_id: str):
     
     mode, status = row
     
-    if status in ["QUEUED", "RUNNING"]:
+    if status in ["QUEUED", "RUNNING", "INGESTING"]:
         raise HTTPException(status_code=400, detail="Cannot download report while job is still running. Please pause or cancel if you want a partial report.")
         
     is_partial = status in ["PARTIAL", "FAILED", "CANCELLED", "PAUSED"]
@@ -328,6 +328,20 @@ async def get_job_stats(job_id: str):
         stats['total_records'] = src_total
         return stats
 
+    if mode == "url_status":
+        counts = await db.get_url_status_counts(job_id)
+        if counts is not None:
+            stats = dict(counts)
+            stats['job_id'] = job_id
+            stats['mode'] = mode
+            stats['created_at'] = created_at
+            stats['updated_at'] = updated_at
+            stats['status'] = status
+            # processed/total are the SAME population: submitted URL rows
+            stats['processed_records'] = counts['processed_urls']
+            stats['total_records'] = counts['total_urls']
+            return stats
+
     if mode == "link_audit":
         stats = await db.get_link_audit_stats(job_id)
         if daemon and hasattr(daemon, "link_validator") and daemon.link_validator:
@@ -378,6 +392,54 @@ async def get_job_stats(job_id: str):
     stats['processed_records'] = processed_records
     stats['total_records'] = total_records
     return stats
+
+_URL_RESULT_OUTCOMES = {
+    "OK", "REDIRECT", "CLIENT_ERROR", "BLOCKED", "SERVER_ERROR", "TIMEOUT", "CONNECTION_ERROR", "DNS_ERROR",
+    "SSL_ERROR", "REDIRECT_LOOP", "NETWORK_ERROR", "BLOCKED_SSRF", "INVALID_URL", "VALIDATION_ERROR",
+}
+
+
+@app.get("/api/jobs/{job_id}/url-results")
+async def get_url_status_results(job_id: str, offset: int = 0, limit: int = 500, outcome: Optional[str] = None):
+    """Paginated per-URL results (one record per submitted URL, submission order)."""
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+    if outcome and outcome not in _URL_RESULT_OUTCOMES:
+        raise HTTPException(status_code=400, detail="Unknown outcome filter")
+    if not await db.job_has_url_items(job_id):
+        raise HTTPException(status_code=404, detail="No per-URL results for this job")
+    limit = max(1, min(int(limit), 5000))
+    items = await db.get_job_url_items_page(job_id, max(0, int(offset)), limit, outcome)
+    return {"job_id": job_id, "offset": offset, "limit": limit, "items": items,
+            "counts": await db.get_url_status_counts(job_id)}
+
+
+@app.get("/api/jobs/{job_id}/url-results.csv")
+async def export_url_status_results_csv(job_id: str):
+    """Streaming CSV export: exactly one row per submitted URL (bounded memory)."""
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID format")
+    if not await db.job_has_url_items(job_id):
+        raise HTTPException(status_code=404, detail="No per-URL results for this job")
+    cols = ReportGenerator.URL_STATUS_EXPORT_COLUMNS
+
+    async def gen():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(cols)
+        n = 0
+        async for item in db.iter_job_url_items(job_id):
+            w.writerow([sanitize_cell_for_export(item.get(c)) for c in cols])
+            n += 1
+            if n % 2000 == 0:
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate(0)
+        yield buf.getvalue()
+
+    return StreamingResponse(gen(), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="url_status_{job_id[:8]}.csv"'})
+
 
 @app.get("/api/jobs/{job_id}/non-200-results")
 async def get_job_non_200_results(job_id: str):

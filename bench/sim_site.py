@@ -23,7 +23,36 @@ def extra_path(k: int) -> str:
     return f"/d/{k}"
 
 
-def page_html(i: int, n_sources: int, primary_base: str, external_base: str) -> str:
+CHROME_IMAGES = 15        # site chrome (logo, icons, badges) shared by every page
+GALLERY_IMAGES = 3        # product images unique to the page, each with a 2-candidate srcset
+
+
+def image_html(i: int, cdn_base: str, primary_base: str) -> str:
+    """Realistic PDP image markup: chrome icons (shared), a <picture> hero, a srcset gallery,
+    lazy-loaded thumbnails, og:image/twitter:image, a few broken / mislabelled images."""
+    chrome = "".join(f'<img src="{cdn_base}/img/chrome/icon-{k}.svg" alt="icon {k}" width="24" height="24">'
+                     for k in range(CHROME_IMAGES))
+    gallery = "".join(
+        f'<img src="{cdn_base}/img/p/{i}/g{g}-400.webp" srcset="{cdn_base}/img/p/{i}/g{g}-400.webp 400w, '
+        f'{cdn_base}/img/p/{i}/g{g}-800.webp 800w" alt="Product {i} view {g}" loading="lazy">'
+        for g in range(GALLERY_IMAGES))
+    picture = (f'<picture><source srcset="{cdn_base}/img/p/{i}/g0-800.webp 1x" type="image/webp">'
+               f'<img src="{cdn_base}/img/p/{i}/g0-400.webp" alt=""></picture>')
+    lazy = f'<img data-src="{cdn_base}/img/p/{i}/g1-400.webp" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'
+    extra = ""
+    if i % 50 == 0:
+        extra += f'<img src="{cdn_base}/img/missing/{i}.jpg" alt="missing">'     # 404 image
+    if i % 97 == 0:
+        extra += f'<img src="{primary_base}/content/dam/fake-{i}.png">'          # served as text/html
+    return chrome + picture + gallery + lazy + extra
+
+
+def image_meta(i: int, cdn_base: str) -> str:
+    return (f'<meta property="og:image" content="{cdn_base}/img/p/{i}/g0-800.webp">'
+            f'<meta name="twitter:image" content="{cdn_base}/img/p/{i}/g0-800.webp">')
+
+
+def page_html(i: int, n_sources: int, primary_base: str, external_base: str, cdn_base: str = "") -> str:
     rnd = random.Random(i * 7919 + 13)
     n_extra = max(1, int(n_sources * EXTRA_DEST_RATIO))
     nav = [source_path(k) for k in range(min(NAV_COUNT, n_sources))]
@@ -50,11 +79,13 @@ def page_html(i: int, n_sources: int, primary_base: str, external_base: str) -> 
         f"<title>Product {i}</title>"
         '<meta name="tag-1" content="PDP"><meta name="tag-2" content="CD">'
         f'<link rel="canonical" href="{primary_base}{source_path(i)}">'
+        + (image_meta(i, cdn_base) if cdn_base else "") +
         f"<script>{script_blob}</script>"
         "</head><body>"
         f"<header><nav>{nav_html}</nav></header>"
         f'<main><h1>Product {i}</h1>{"".join(blocks)}<section class="related">{rel_html}{extra_html}{ext_html}</section>'
-        f'<iframe src="{external_base}/widget" title="widget"></iframe></main>'
+        f'<iframe src="{external_base}/widget" title="widget"></iframe>'
+        + (image_html(i, cdn_base, primary_base) if cdn_base else "") + "</main>"
         f"<footer>{nav_html[:200]}</footer>"
         "</body></html>"
     )

@@ -1,8 +1,22 @@
 import urllib.parse
 import ipaddress
 import socket
+import threading
+import time
 from functools import lru_cache
 from typing import Optional, Union
+
+
+class _DNSResolutionError(Exception):
+    """Raised inside the cached resolver so DNS failures are NOT memoized by lru_cache
+    (a transient resolver hiccup must not mark a host unreachable for the process lifetime)."""
+
+
+# Short negative cache for DNS failures: avoids hammering the resolver for every URL of a dead
+# host in a 125K-URL job, while still re-trying the host after the TTL.
+_DNS_FAIL_TTL_SEC = 60.0
+_dns_fail_until = {}
+_dns_fail_lock = threading.Lock()
 
 def _try_parse_numeric_ip(host: str) -> Optional[ipaddress.IPv4Address]:
     host = host.strip("[]")
@@ -81,10 +95,20 @@ def _resolve_and_check_hostname(hostname: str, allow_local: bool = False) -> boo
         pass
         
     # 3. Resolve DNS and inspect all returned IP addresses
+    now = time.monotonic()
+    with _dns_fail_lock:
+        until = _dns_fail_until.get(h_lower)
+    if until is not None and until > now:
+        raise _DNSResolutionError(h_clean)
     try:
         addr_info = socket.getaddrinfo(h_clean, None)
-        if not addr_info:
-            return False
+    except Exception:
+        with _dns_fail_lock:
+            _dns_fail_until[h_lower] = time.monotonic() + _DNS_FAIL_TTL_SEC
+        raise _DNSResolutionError(h_clean)
+    if not addr_info:
+        raise _DNSResolutionError(h_clean)
+    try:
         for item in addr_info:
             ip_str = item[4][0]
             ip = ipaddress.ip_address(ip_str)
@@ -111,6 +135,45 @@ class URLNormalizer:
             return _resolve_and_check_hostname(hostname, allow_local=allow_local)
         except Exception:
             return False
+
+    @staticmethod
+    def is_valid_http_url(url: str) -> bool:
+        """Pure syntax check (no network): absolute http(s) URL with a host and no embedded whitespace."""
+        try:
+            if not url or not isinstance(url, str):
+                return False
+            u = url.strip()
+            if any(ch.isspace() for ch in u):
+                return False
+            parsed = urllib.parse.urlsplit(u)
+            if parsed.scheme.lower() not in ("http", "https"):
+                return False
+            if not parsed.hostname:
+                return False
+            parsed.port  # raises ValueError on a malformed port
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def classify_url_safety(url: str, allow_local: bool = False) -> str:
+        """
+        Explain an is_safe_url() decision instead of collapsing it to a bool:
+          'SAFE'          -> may be requested
+          'INVALID_URL'   -> not a syntactically valid http(s) URL
+          'DNS_ERROR'     -> hostname could not be resolved (validation failure, retryable)
+          'BLOCKED_SSRF'  -> resolves to / is a prohibited address (security block)
+        Security is unchanged: anything that is not 'SAFE' is never requested.
+        """
+        if not URLNormalizer.is_valid_http_url(url):
+            return "INVALID_URL"
+        hostname = urllib.parse.urlsplit(url.strip()).hostname
+        try:
+            return "SAFE" if _resolve_and_check_hostname(hostname, allow_local=allow_local) else "BLOCKED_SSRF"
+        except _DNSResolutionError:
+            return "DNS_ERROR"
+        except Exception:
+            return "BLOCKED_SSRF"
 
     @staticmethod
     def normalize(href: str) -> str:

@@ -10,6 +10,48 @@ from browser import BrowserPool
 from urllib.parse import urlparse
 from tuner import ConcurrencyTuner
 from diagnostics_403 import Diagnostics403
+from url_normalizer import URLNormalizer
+
+
+class SSRFRedirectBlocked(Exception):
+    """A redirect hop pointed at a prohibited (private / link-local / metadata) address."""
+
+
+async def _ssrf_guard_request_hook(request: httpx.Request):
+    # Runs for EVERY request the client sends, including each automatically followed redirect hop.
+    url = str(request.url)
+    if not URLNormalizer.is_safe_url(url, allow_local=getattr(settings, "ALLOW_LOCAL_TESTING", False)):
+        raise SSRFRedirectBlocked(f"Blocked (SSRF): request to prohibited destination {url}")
+
+
+def classify_request_exception(e: BaseException) -> str:
+    """Map a transport exception to a QC V5 error_type using the exception TYPE first and the
+    message only as a tie-breaker (httpx DNS failures say e.g. 'Name or service not known')."""
+    for exc in (e, getattr(e, "__cause__", None), getattr(e, "__context__", None)):
+        if isinstance(exc, SSRFRedirectBlocked):
+            return "Blocked (SSRF)"
+    if isinstance(e, httpx.TooManyRedirects):
+        return "Redirect Loop"
+    if isinstance(e, httpx.TimeoutException):
+        return "Timeout"
+    msg = str(e).lower()
+    if "ssl" in msg or "certificate" in msg or "tls" in msg:
+        return "SSL Error"
+    if any(k in msg for k in ("name or service not known", "nodename nor servname", "getaddrinfo",
+                              "name resolution", "no address associated", "name_not_resolved", "dns")):
+        return "DNS Error"
+    if isinstance(e, httpx.ConnectError) or "connect" in msg or "refused" in msg:
+        return "Connection Error"
+    if "timeout" in msg or "timed out" in msg:
+        return "Timeout"
+    return "Network Error"
+
+
+def _retry_after_seconds(value, default: float = 2.0, cap: float = 30.0) -> float:
+    try:
+        return max(0.0, min(cap, float(value)))
+    except (TypeError, ValueError):
+        return default  # HTTP-date or garbage: fall back instead of crashing the check
 
 class URLChecker:
     def __init__(self, browser_pool: BrowserPool):
@@ -30,7 +72,8 @@ class URLChecker:
             timeout=timeout,
             limits=limits,
             follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            event_hooks={"request": [_ssrf_guard_request_hook]},
         )
         self.domain_semaphores = {}
         self.tuner = ConcurrencyTuner(settings.HTTP_CONCURRENCY)
@@ -58,7 +101,8 @@ class URLChecker:
                 
         # Playwright Fallback for suspicious HTTP responses
         if settings.BROWSER_FALLBACK:
-            if not success or result.final_status_code in [401, 403, 429] or result.error_type:
+            if (not success or result.final_status_code in [401, 403, 429] or result.error_type) \
+                    and result.error_type not in ("Blocked (SSRF)", "Redirect Loop"):
                 await self._browser_check(result)
                 
         # Classification
@@ -84,58 +128,57 @@ class URLChecker:
         success = False
         
         while retries <= settings.MAX_RETRIES and not success:
+            result.attempts += 1
             try:
-                if settings.USE_HEAD_FIRST:
-                    # In CLASSIFYING stage, we might need HTML.
-                    # Since we are sharing fetch, we just use GET.
-                    resp = await self.http_client.get(result.normalized_url)
-                else:
-                    resp = await self.http_client.get(result.normalized_url)
-                    
+                resp = await self.http_client.get(result.normalized_url)
+
                 result.response_time_ms = round((time.time() - start) * 1000, 2)
                 result.final_status_code = resp.status_code
                 result.final_url = str(resp.url)
-                
+
                 try:
                     result.html = resp.text
                 except Exception:
                     result.html = ""
-                
+
                 chain = [{"url": str(r.url), "status": r.status_code} for r in resp.history]
                 result.redirect_chain = json.dumps(chain)
                 result.redirect_count = len(chain)
                 result.initial_status_code = chain[0]["status"] if chain else resp.status_code
-                
+
                 result.content_type = resp.headers.get("content-type", "")
-                result.content_length = int(resp.headers.get("content-length", 0))
-                
+                try:
+                    result.content_length = int(resp.headers.get("content-length", 0) or 0)
+                except ValueError:
+                    result.content_length = 0
+
                 result.check_method = "HTTP"
                 result.error_type = ""
                 result.error_message = ""
-                
+
                 if resp.status_code in [502, 503, 504]:
                     retries += 1
-                    await asyncio.sleep(2 ** retries)
+                    if retries <= settings.MAX_RETRIES:
+                        await asyncio.sleep(2 ** retries)
                 elif resp.status_code == 429:
-                    retry_after = int(resp.headers.get("retry-after", 2))
                     retries += 1
-                    await asyncio.sleep(retry_after)
+                    if retries <= settings.MAX_RETRIES:
+                        await asyncio.sleep(_retry_after_seconds(resp.headers.get("retry-after")))
                 else:
                     success = True
-                    
+
             except Exception as e:
                 result.response_time_ms = round((time.time() - start) * 1000, 2)
-                err = str(e).lower()
-                if "timeout" in err: result.error_type = "Timeout"
-                elif "dns" in err or "name_not_resolved" in err or "resolve" in err: result.error_type = "DNS Error"
-                elif "connect" in err: result.error_type = "Connection Error"
-                elif "ssl" in err or "cert" in err: result.error_type = "SSL Error"
-                else: result.error_type = "Network Error"
-                result.error_message = str(e)
-                
+                result.error_type = classify_request_exception(e)
+                result.error_message = str(e)[:500] or e.__class__.__name__
+                result.final_status_code = None
+                result.check_method = "HTTP"
+                if result.error_type in ("Blocked (SSRF)", "Redirect Loop"):
+                    break  # deterministic: retrying cannot change the outcome
                 retries += 1
-                await asyncio.sleep(2 ** retries)
-                
+                if retries <= settings.MAX_RETRIES:
+                    await asyncio.sleep(2 ** retries)
+
         return success
 
     async def _browser_check(self, result: UrlResult):

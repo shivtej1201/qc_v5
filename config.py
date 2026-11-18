@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     SITEMAP_CONCURRENCY: int = 5
     ALLOW_LOCAL_TESTING: bool = False
 
+    # On-page image audit: configurable image-bearing attributes (one parse pass collects them all)
+    ON_PAGE_IMAGE_ATTRIBUTES: list = ["src", "data-src", "data-lazy-src", "data-original", "data-image", "srcset", "data-srcset"]
+    ON_PAGE_IMAGE_SOURCE_ATTRIBUTES: list = ["srcset", "data-srcset"]          # <picture><source ...>
+    ON_PAGE_IMAGE_META_KEYS: list = ["og:image", "og:image:url", "og:image:secure_url", "twitter:image", "twitter:image:src"]
+
     class Config:
         env_file = ".env"
 

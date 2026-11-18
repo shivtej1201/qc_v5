@@ -3,6 +3,43 @@ import urllib.parse
 from config import settings
 from typing import List, Dict, Any
 
+
+def parse_srcset(value: str) -> List[str]:
+    """Split a srcset/data-srcset value into its candidate URLs (HTML spec tokenizer):
+    candidates are separated by commas, a URL runs until whitespace, descriptors (400w, 2x) are
+    dropped, and commas INSIDE a URL (e.g. CDN transforms 'w_400,h_300') are kept."""
+    urls: List[str] = []
+    if not value:
+        return urls
+    s, i, n = value, 0, len(value)
+    while i < n:
+        while i < n and (s[i].isspace() or s[i] == ","):
+            i += 1
+        if i >= n:
+            break
+        j = i
+        while j < n and not s[j].isspace():
+            j += 1
+        url = s[i:j]
+        if url.endswith(","):
+            url = url.rstrip(",")
+            i = j
+        else:
+            i = j
+            depth = 0
+            while i < n:                      # skip descriptors up to the next top-level comma
+                c = s[i]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth = max(0, depth - 1)
+                elif c == "," and depth == 0:
+                    break
+                i += 1
+        if url:
+            urls.append(url)
+    return urls
+
 class Parser(HTMLParser):
     def __init__(self, base_url: str):
         super().__init__()
@@ -22,6 +59,11 @@ class Parser(HTMLParser):
         self.all_on_page_urls = []
         self.canonicals = []
         self.hreflangs = []
+        # On-page image audit: every image-bearing attribute occurrence (collected in the same pass)
+        self.all_on_page_images = []
+        self._img_attrs = tuple(a.lower() for a in getattr(settings, "ON_PAGE_IMAGE_ATTRIBUTES", ["src", "srcset"]))
+        self._src_attrs = tuple(a.lower() for a in getattr(settings, "ON_PAGE_IMAGE_SOURCE_ATTRIBUTES", ["srcset"]))
+        self._img_meta = frozenset(k.lower() for k in getattr(settings, "ON_PAGE_IMAGE_META_KEYS", ["og:image", "twitter:image"]))
         
         self.current_tag = None
         self.current_anchor = None
@@ -55,6 +97,11 @@ class Parser(HTMLParser):
             name = attr_dict.get('name', '')
             if name == 'description':
                 self.meta_desc = attr_dict.get('content', '')
+            meta_key = (attr_dict.get('property') or name or '').strip().lower()
+            if meta_key in self._img_meta:
+                content = (attr_dict.get('content') or '').strip()
+                if content:
+                    self._add_image(content, meta_key, None, {}, 'Head' if self.in_head else self._identify_component())
                 
         elif tag == 'link':
             rel = attr_dict.get('rel', '').strip()
@@ -147,7 +194,19 @@ class Parser(HTMLParser):
                     'component': self._identify_component(),
                 })
                 
-        elif tag == 'img':
+        elif tag == 'source' and any(p[0] == 'picture' for p in self.path):
+            comp = None
+            for a in self._src_attrs:
+                v = attr_dict.get(a)
+                if v and str(v).strip():
+                    comp = comp or self._identify_component()
+                    for u in parse_srcset(str(v)):
+                        self._add_image(u, f"source.{a}", None, attr_dict, comp)
+
+        if tag == 'img':
+            self._collect_img_attributes(attr_dict)
+
+        if tag == 'img':
             src = attr_dict.get('src') or attr_dict.get('data-src') or attr_dict.get('data-lazy-src') or attr_dict.get('data-original')
             if not src and 'srcset' in attr_dict:
                 src = attr_dict['srcset'].split(',')[0].strip().split(' ')[0]
@@ -171,6 +230,33 @@ class Parser(HTMLParser):
                     'container_type': self._identify_container_type(comp)
                 })
                 
+    def _add_image(self, raw: str, attribute_source: str, alt, attrs: Dict[str, Any], component: str):
+        # alt: None = not applicable/unknown (meta tags, <source>); otherwise (present, text) from the <img>
+        self.all_on_page_images.append({
+            'src': raw,
+            'attribute_source': attribute_source,
+            'alt_present': None if alt is None else alt[0],
+            'alt_text': '' if alt is None else alt[1],
+            'width': str(attrs.get('width', '') or '').strip()[:20],
+            'height': str(attrs.get('height', '') or '').strip()[:20],
+            'loading': str(attrs.get('loading', '') or '').strip()[:20],
+            'component': component,
+        })
+
+    def _collect_img_attributes(self, attr_dict: Dict[str, Any]):
+        alt = ('alt' in attr_dict, ' '.join(str(attr_dict.get('alt') or '').split())[:250])
+        comp = None
+        for a in self._img_attrs:
+            v = attr_dict.get(a)
+            if v is None or not str(v).strip():
+                continue
+            comp = comp or self._identify_component()
+            if a.endswith('srcset'):
+                for u in parse_srcset(str(v)):
+                    self._add_image(u, f"img.{a}", alt, attr_dict, comp)
+            else:
+                self._add_image(str(v).strip(), f"img.{a}", alt, attr_dict, comp)
+
     def handle_endtag(self, tag):
         if tag == 'head':
             self.in_head = False

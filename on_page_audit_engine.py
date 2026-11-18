@@ -121,6 +121,15 @@ def classify_and_normalize_discovered_url(
         }
 
     norm = URLNormalizer.normalize(resolved)
+    if not URLNormalizer.is_valid_http_url(norm):
+        # e.g. "http://", "https://exa mple.com", bad port: recorded, never requested
+        return {
+            "valid": True,
+            "url_syntax_type": syntax_type,
+            "found_url_scope": "INVALID",
+            "normalized_url": norm[:500],
+            "is_http": False,
+        }
     dest_host = (urllib.parse.urlsplit(norm).hostname or "").lower()
     src_host_clean = (source_host or "").lower()
 
@@ -219,6 +228,77 @@ def extract_on_page_urls(
                 rec["hreflang"] = hreflang
 
     return raw_count, list(grouped.values()), parser
+
+
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".bmp", ".ico", ".tif", ".tiff", ".jfif")
+
+
+def classify_image_url(raw: str, base_url: str, source_host: str) -> Dict[str, Any]:
+    """Image classification reusing the URL normalizer + scope rules:
+    image_type: HTTP_IMAGE | HTTPS_IMAGE | NON_HTTP_IMAGE | INVALID_IMAGE
+    internal_external: INTERNAL_IMAGE | EXTERNAL_IMAGE ('' when not an HTTP image)."""
+    raw = (raw or "").strip()
+    scheme_match = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):", raw)
+    if scheme_match and not raw.startswith("//") and scheme_match.group(1).lower() not in ("http", "https"):
+        return {"image_type": "NON_HTTP_IMAGE", "internal_external": "", "normalized": raw[:300], "is_http": False}
+    try:
+        resolved = urllib.parse.urljoin(base_url, raw)
+    except ValueError:
+        return {"image_type": "INVALID_IMAGE", "internal_external": "", "normalized": raw[:300], "is_http": False}
+    if not URLNormalizer.is_valid_http_url(resolved):
+        return {"image_type": "INVALID_IMAGE", "internal_external": "", "normalized": resolved[:300], "is_http": False}
+    norm = URLNormalizer.normalize(resolved)
+    host = (urllib.parse.urlsplit(norm).hostname or "").lower()
+    src = (source_host or "").lower()
+    internal = host == src or (registrable_domain(host) == registrable_domain(src) and host not in ("", "localhost"))
+    return {
+        "image_type": "HTTPS_IMAGE" if norm.lower().startswith("https:") else "HTTP_IMAGE",
+        "internal_external": "INTERNAL_IMAGE" if internal else "EXTERNAL_IMAGE",
+        "normalized": norm,
+        "is_http": True,
+    }
+
+
+def extract_on_page_images(parser: Parser, source_host: str) -> Tuple[int, List[Dict[str, Any]]]:
+    """
+    Collapse the parser's image occurrences per (normalized image URL, alt_present, alt_text):
+    the same image with the same alt on one page is ONE relationship with occurrence_count and all
+    attribute sources; a different alt text on the same page is a separate SEO relationship.
+    Validation is later deduplicated by normalized image URL only (alt is never part of that key).
+    """
+    raw_list = parser.all_on_page_images
+    grouped: Dict[Tuple[str, Any, str], Dict[str, Any]] = {}
+    for el in raw_list:
+        raw = (el.get("src") or "").strip()
+        if not raw:
+            continue
+        meta = classify_image_url(raw, parser.final_base_href, source_host)
+        key = (meta["normalized"], el.get("alt_present"), el.get("alt_text") or "")
+        rec = grouped.get(key)
+        if rec is None:
+            grouped[key] = {
+                "image_url": raw[:1000],
+                "normalized_image_url": meta["normalized"],
+                "image_type": meta["image_type"],
+                "internal_external": meta["internal_external"],
+                "is_http": meta["is_http"],
+                "attribute_sources": [el["attribute_source"]],
+                "alt_present": el.get("alt_present"),
+                "alt_text": el.get("alt_text") or "",
+                "width": el.get("width") or "",
+                "height": el.get("height") or "",
+                "loading": el.get("loading") or "",
+                "occurrence_count": 1,
+                "representative_location": el.get("component") or "",
+            }
+        else:
+            rec["occurrence_count"] += 1
+            if el["attribute_source"] not in rec["attribute_sources"]:
+                rec["attribute_sources"].append(el["attribute_source"])
+            for f in ("width", "height", "loading"):
+                if not rec[f] and el.get(f):
+                    rec[f] = el[f]
+    return len(raw_list), list(grouped.values())
 
 
 def classify_http_outcome(
@@ -366,6 +446,97 @@ def classify_http_outcome(
     return ("FAILED", "Other errors", cat or "Unknown", f"Unexpected HTTP Status ({final_status})", waf_status)
 
 
+ON_PAGE_IMAGE_SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS on_page_image_relationships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id TEXT NOT NULL,
+        source_page_url TEXT NOT NULL,
+        source_page_status INTEGER,
+        source_page_final_url TEXT,
+        image_url TEXT NOT NULL,
+        normalized_image_url TEXT NOT NULL,
+        image_type TEXT NOT NULL,
+        internal_external TEXT DEFAULT '',
+        attribute_source TEXT DEFAULT '',
+        alt_present INTEGER DEFAULT -1,
+        alt_text TEXT DEFAULT '',
+        width TEXT DEFAULT '',
+        height TEXT DEFAULT '',
+        loading TEXT DEFAULT '',
+        occurrence_count INTEGER DEFAULT 1,
+        representative_location TEXT DEFAULT '',
+        business TEXT DEFAULT 'NEEDS_REVIEW',
+        language TEXT DEFAULT 'UNKNOWN',
+        page_type TEXT DEFAULT 'NEEDS_REVIEW',
+        validation_source TEXT NOT NULL,
+        validation_detail TEXT DEFAULT '',
+        remark TEXT DEFAULT '',
+        extracted_at TIMESTAMP,
+        UNIQUE (job_id, source_page_url, normalized_image_url, alt_present, alt_text)
+    );
+    CREATE INDEX IF NOT EXISTS idx_opir_img ON on_page_image_relationships(job_id, normalized_image_url);
+    CREATE INDEX IF NOT EXISTS idx_opir_valsrc ON on_page_image_relationships(job_id, validation_source);
+
+    CREATE TABLE IF NOT EXISTS on_page_image_validation_cache (
+        job_id TEXT NOT NULL,
+        normalized_url TEXT NOT NULL,
+        image_type TEXT DEFAULT '',
+        internal_external TEXT DEFAULT '',
+        validation_state TEXT DEFAULT 'PENDING',
+        initial_http_status INTEGER,
+        http_status INTEGER,
+        final_url TEXT,
+        redirect_count INTEGER DEFAULT 0,
+        redirect_chain TEXT DEFAULT '[]',
+        response_time_ms REAL DEFAULT 0.0,
+        content_type TEXT DEFAULT '',
+        content_length INTEGER,
+        status_bucket TEXT DEFAULT 'PENDING',
+        status_classification TEXT DEFAULT 'Pending',
+        remark TEXT DEFAULT 'Pending Validation',
+        image_issue TEXT DEFAULT '',
+        error_type TEXT DEFAULT '',
+        error_message TEXT DEFAULT '',
+        robots_status TEXT DEFAULT 'ALLOWED',
+        waf_status TEXT DEFAULT 'NONE',
+        first_seen_source_url TEXT DEFAULT '',
+        reuse_count INTEGER DEFAULT 0,
+        checked_at TIMESTAMP,
+        PRIMARY KEY (job_id, normalized_url)
+    );
+    CREATE INDEX IF NOT EXISTS idx_opivc_state ON on_page_image_validation_cache(job_id, validation_state);
+"""
+
+ON_PAGE_IMAGE_ALTERS = (
+    "ALTER TABLE on_page_link_relationships ADD COLUMN validation_detail TEXT DEFAULT ''",
+    "ALTER TABLE on_page_validation_cache ADD COLUMN seeded_by TEXT DEFAULT ''",
+    "ALTER TABLE on_page_source_pages ADD COLUMN raw_image_occurrences_count INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_source_pages ADD COLUMN image_relationships_count INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN image_occurrences_extracted INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN image_relationships_persisted INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_image_urls INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_validated INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_failed INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_blocked INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_timed_out INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_pending INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN new_image_validations INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN reused_image_validations INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN live_metrics TEXT DEFAULT ''",
+)
+
+
+def ensure_on_page_image_schema(conn: sqlite3.Connection):
+    """Additive, idempotent schema for the image audit (new tables + nullable/defaulted columns)."""
+    conn.executescript(ON_PAGE_IMAGE_SCHEMA_SQL)
+    for stmt in ON_PAGE_IMAGE_ALTERS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    conn.commit()
+
+
 class RobotsCache:
     """Async per-host robots.txt fetcher & cache respecting QC V5 security."""
 
@@ -457,6 +628,10 @@ class OnPageAuditEngine:
         keepalive_expiry: float = 30.0,
         discard_body_limit: int = 256 * 1024,
         primary_hosts: Optional[List[str]] = None,
+        audit_images: bool = True,
+        image_concurrency: int = 10,
+        image_discard_body_limit: int = 64 * 1024,
+        max_connections: Optional[int] = None,
     ):
         self.db_path = db_path
         self.job_id = job_id or str(uuid.uuid4())
@@ -489,6 +664,22 @@ class OnPageAuditEngine:
         self.keepalive_expiry = keepalive_expiry
         self.discard_body_limit = discard_body_limit
         self.primary_hosts = {h.lower().strip() for h in (primary_hosts or []) if h and h.strip()}
+        self.audit_images = audit_images
+        self.image_concurrency = max(1, int(image_concurrency))
+        self.image_discard_body_limit = image_discard_body_limit
+        self.max_connections = max_connections
+
+        # ---- Image registry (separate cache from page/link validation) ----
+        self._img_state: Dict[str, str] = {}
+        self._img_inflight: Dict[str, asyncio.Future] = {}
+        self._img_seen: Set[str] = set()
+        self._img_outstanding = 0
+        self._img_q: Optional[asyncio.Queue] = None
+        self._img_idle: Optional[asyncio.Event] = None
+        self._w_img_cache: Dict[str, str] = {}
+        self._img_mirror: Dict[str, Any] = {}
+        self._img_rels_discovered = 0
+        self._source_seeded: Set[str] = set()
 
         self.classifier = Classifier()
         self.robots = RobotsCache(allow_local=allow_local, before_fetch=self._pace_if_primary)
@@ -728,6 +919,7 @@ class OnPageAuditEngine:
             conn.commit()
         except Exception:
             pass
+        ensure_on_page_image_schema(conn)
 
     def initialize_inventory(self, source_entries: List[Dict[str, Any]]) -> str:
         """
@@ -829,6 +1021,11 @@ class OnPageAuditEngine:
             "rss_peak_mb": 0.0,
             "cpu_samples": [],
             "rps_history": [],
+            "requests_by_kind": Counter(),         # network requests: source / url / image / robots / probe
+            "primary_requests_by_kind": Counter(),  # of which charged to the primary budget
+            "image_validations": 0,
+            "image_validations_skipped_cached": 0,
+            "robots_blocked": 0,
         }
 
     @staticmethod
@@ -886,8 +1083,10 @@ class OnPageAuditEngine:
                 return
 
     async def _pace_if_primary(self, url: str):
+        self.metrics["requests_by_kind"]["robots"] += 1
         if self._is_primary_host(url):
             await self._acquire_primary_pace()
+            self.metrics["primary_requests_by_kind"]["robots"] += 1
 
     def _note_primary_ok(self):
         """Adaptive increase (shared by source + destination traffic: same edge, same budget)."""
@@ -915,6 +1114,7 @@ class OnPageAuditEngine:
         for attempt in range(1, 12):
             try:
                 self.metrics["http_requests"] += 1
+                self.metrics["requests_by_kind"]["probe"] += 1
                 r = await client.get(probe_url, timeout=10.0)
                 if r.status_code == 200:
                     print(f"[READY] Primary edge open ({probe_url} -> 200 on probe #{attempt})", flush=True)
@@ -949,21 +1149,22 @@ class OnPageAuditEngine:
                 self._next_slot_ts = time.monotonic()
                 self._cooldown_gate.set()
 
-    async def _discard_body(self, resp: httpx.Response):
+    async def _discard_body(self, resp: httpx.Response, limit: Optional[int] = None):
         """
         Destination checks do not need the body. Drain small bodies as raw (still-compressed)
         bytes so the keep-alive connection can be reused without paying gzip decode; for large
         or unbounded bodies (PDFs, media) stop early and let httpx close the connection instead
         of downloading megabytes. The HTTP status is already authoritative at this point.
         """
+        limit = self.discard_body_limit if limit is None else limit
         try:
             cl = resp.headers.get("content-length")
-            if cl and cl.isdigit() and int(cl) > self.discard_body_limit:
+            if cl and cl.isdigit() and int(cl) > limit:
                 return
             n = 0
             async for chunk in resp.aiter_raw():
                 n += len(chunk)
-                if n > self.discard_body_limit:
+                if n > limit:
                     return
         except Exception:
             return
@@ -974,6 +1175,8 @@ class OnPageAuditEngine:
         url: str,
         need_body: bool = True,
         max_hops: int = 10,
+        kind: str = "url",
+        discard_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Fetch URL with:
@@ -1013,6 +1216,7 @@ class OnPageAuditEngine:
         # 2. Robots validation
         robots_ok = await self.robots.can_fetch(client, url)
         if not robots_ok:
+            self.metrics["robots_blocked"] += 1
             term, bkt, scls, rem, waf_st = classify_http_outcome(
                 None, None, 0, "", "", False, True, None
             )
@@ -1078,9 +1282,11 @@ class OnPageAuditEngine:
 
                         if (is_primary and _hop == 0) or (_hop > 0 and self._is_primary_host(current_url)):
                             await self._acquire_primary_pace()
+                            m["primary_requests_by_kind"][kind] += 1
 
                         t_req = time.perf_counter()
                         m["http_requests"] += 1
+                        m["requests_by_kind"][kind] += 1
                         async with client.stream("GET", current_url) as resp:
                             st = resp.status_code
                             m["status_counts"][st] += 1
@@ -1092,9 +1298,9 @@ class OnPageAuditEngine:
                                     final_url = current_url
                                     content_type = resp.headers.get("content-type", "")
                                     resp_headers = dict(resp.headers)
-                                    await self._discard_body(resp)
+                                    await self._discard_body(resp, discard_limit)
                                     break
-                                await self._discard_body(resp)
+                                await self._discard_body(resp, discard_limit)
                                 next_url = URLNormalizer.normalize(urllib.parse.urljoin(current_url, location))
                                 if next_url in visited_in_chain or len(redirect_chain) >= max_hops:
                                     error_type = "Redirect Loop"
@@ -1112,7 +1318,7 @@ class OnPageAuditEngine:
                                 if need_body or st in (403, 429):
                                     raw_bytes = (await resp.aread())[: settings.MAX_PAYLOAD_SIZE_BYTES]
                                 else:
-                                    await self._discard_body(resp)
+                                    await self._discard_body(resp, discard_limit)
                                 self._reservoir_add(m["latencies_ms"], (time.perf_counter() - t_req) * 1000.0)
                                 break
 
@@ -1215,6 +1421,7 @@ class OnPageAuditEngine:
             "waf_status": waf_st,
             "html": html_text if need_body else "",
             "is_primary_waf": is_primary_waf,
+            "content_length": int(resp_headers.get("content-length")) if str(resp_headers.get("content-length", "")).isdigit() else None,
         }
 
     def _exec_with_retry(self, fn):
@@ -1251,11 +1458,18 @@ class OnPageAuditEngine:
         cache_seed_inserts: List[Dict[str, Any]],
         cache_reuse_increments: Counter,
         source_self_cache_upserts: List[Dict[str, Any]],
-    ) -> int:
+        img_rels: Optional[List[Dict[str, Any]]] = None,
+        img_seeds: Optional[List[Dict[str, Any]]] = None,
+        img_incs: Optional[Counter] = None,
+    ) -> Tuple[int, int]:
         """Execute the source-side statements inside the CALLER's transaction.
-        Returns the exact number of relationship rows inserted."""
+        Returns the exact numbers of (URL relationship rows, image relationship rows) inserted."""
         rel_rowcount = 0
+        img_rowcount = 0
         if source_updates:
+            for su in source_updates:
+                su.setdefault("raw_image_occurrences_count", 0)
+                su.setdefault("image_relationships_count", 0)
             self.conn.executemany(
                 """
                 UPDATE on_page_source_pages SET
@@ -1277,6 +1491,8 @@ class OnPageAuditEngine:
                     classification_method = :classification_method,
                     raw_occurrences_count = :raw_occurrences_count,
                     relationships_count = :relationships_count,
+                    raw_image_occurrences_count = :raw_image_occurrences_count,
+                    image_relationships_count = :image_relationships_count,
                     remark = :remark,
                     checked_at = :checked_at
                 WHERE job_id = :job_id AND source_page_url = :source_page_url
@@ -1323,15 +1539,17 @@ class OnPageAuditEngine:
                     initial_http_status, http_status, final_url, redirect_count,
                     redirect_chain, response_time_ms, content_type, status_bucket,
                     status_classification, remark, error_type, error_message,
-                    robots_status, waf_status, first_seen_source_url, reuse_count, referenced, checked_at
+                    robots_status, waf_status, first_seen_source_url, reuse_count, referenced, checked_at, seeded_by
                 ) VALUES (
                     :job_id, :normalized_url, 'INTERNAL', :validation_state,
                     :initial_http_status, :http_status, :final_url, :redirect_count,
                     :redirect_chain, :response_time_ms, :content_type, :status_bucket,
                     :status_classification, :remark, :error_type, :error_message,
-                    :robots_status, :waf_status, :first_seen_source_url, 0, 0, :checked_at
+                    :robots_status, :waf_status, :first_seen_source_url, 0, 0, :checked_at, 'SOURCE_FETCH'
                 )
                 ON CONFLICT(job_id, normalized_url) DO UPDATE SET
+                    seeded_by = CASE WHEN on_page_validation_cache.validation_state = 'PENDING'
+                        THEN 'SOURCE_FETCH' ELSE on_page_validation_cache.seeded_by END,
                     validation_state = CASE WHEN on_page_validation_cache.validation_state = 'PENDING'
                         THEN excluded.validation_state ELSE on_page_validation_cache.validation_state END,
                     initial_http_status = CASE WHEN on_page_validation_cache.validation_state = 'PENDING'
@@ -1369,6 +1587,8 @@ class OnPageAuditEngine:
             )
 
         if rel_inserts:
+            for r in rel_inserts:
+                r.setdefault("validation_detail", r.get("validation_source", ""))
             rel_rowcount = self.conn.executemany(
                 """
                 INSERT OR IGNORE INTO on_page_link_relationships (
@@ -1376,13 +1596,13 @@ class OnPageAuditEngine:
                     found_url, normalized_found_url, found_url_type, url_syntax_type,
                     found_url_scope, anchor_text, anchor_texts, link_types, rel, hreflang,
                     occurrence_count, representative_location, business, language, page_type,
-                    validation_source, remark, extracted_at
+                    validation_source, remark, extracted_at, validation_detail
                 ) VALUES (
                     :job_id, :source_page_url, :source_page_status, :source_page_final_url,
                     :found_url, :normalized_found_url, :found_url_type, :url_syntax_type,
                     :found_url_scope, :anchor_text, :anchor_texts, :link_types, :rel, :hreflang,
                     :occurrence_count, :representative_location, :business, :language, :page_type,
-                    :validation_source, :remark, :extracted_at
+                    :validation_source, :remark, :extracted_at, :validation_detail
                 )
                 """,
                 rel_inserts,
@@ -1393,7 +1613,66 @@ class OnPageAuditEngine:
                 "UPDATE on_page_validation_cache SET reuse_count = reuse_count + ? WHERE job_id = ? AND normalized_url = ?",
                 [(cnt, self.job_id, u) for u, cnt in cache_reuse_increments.items()],
             )
-        return rel_rowcount
+
+        # ---- images (same transaction as their source page: no orphan/lost image relationships)
+        if img_seeds:
+            self.conn.executemany(
+                """INSERT INTO on_page_image_validation_cache (job_id, normalized_url, image_type, internal_external,
+                       validation_state, first_seen_source_url)
+                   VALUES (:job_id, :normalized_url, :image_type, :internal_external, 'PENDING', :first_seen_source_url)
+                   ON CONFLICT(job_id, normalized_url) DO NOTHING""",
+                img_seeds,
+            )
+        if img_rels:
+            img_rowcount = self.conn.executemany(
+                """INSERT OR IGNORE INTO on_page_image_relationships (
+                       job_id, source_page_url, source_page_status, source_page_final_url, image_url,
+                       normalized_image_url, image_type, internal_external, attribute_source, alt_present, alt_text,
+                       width, height, loading, occurrence_count, representative_location, business, language,
+                       page_type, validation_source, validation_detail, remark, extracted_at
+                   ) VALUES (
+                       :job_id, :source_page_url, :source_page_status, :source_page_final_url, :image_url,
+                       :normalized_image_url, :image_type, :internal_external, :attribute_source, :alt_present, :alt_text,
+                       :width, :height, :loading, :occurrence_count, :representative_location, :business, :language,
+                       :page_type, :validation_source, :validation_detail, :remark, :extracted_at
+                   )""",
+                img_rels,
+            ).rowcount
+        if img_incs:
+            self.conn.executemany(
+                "UPDATE on_page_image_validation_cache SET reuse_count = reuse_count + ? WHERE job_id = ? AND normalized_url = ?",
+                [(cnt, self.job_id, u) for u, cnt in img_incs.items()],
+            )
+        return rel_rowcount, img_rowcount
+
+    def _write_image_parts(self, img_updates: List[Dict[str, Any]]):
+        """Image validation results (UPSERT) inside the CALLER's transaction."""
+        self.conn.executemany(
+            """
+            INSERT INTO on_page_image_validation_cache (
+                job_id, normalized_url, image_type, internal_external, validation_state, initial_http_status,
+                http_status, final_url, redirect_count, redirect_chain, response_time_ms, content_type,
+                content_length, status_bucket, status_classification, remark, image_issue, error_type,
+                error_message, robots_status, waf_status, checked_at
+            ) VALUES (
+                :job_id, :normalized_url, :image_type, :internal_external, :validation_state, :initial_http_status,
+                :http_status, :final_url, :redirect_count, :redirect_chain, :response_time_ms, :content_type,
+                :content_length, :status_bucket, :status_classification, :remark, :image_issue, :error_type,
+                :error_message, :robots_status, :waf_status, :checked_at
+            )
+            ON CONFLICT(job_id, normalized_url) DO UPDATE SET
+                validation_state = excluded.validation_state, initial_http_status = excluded.initial_http_status,
+                http_status = excluded.http_status, final_url = excluded.final_url,
+                redirect_count = excluded.redirect_count, redirect_chain = excluded.redirect_chain,
+                response_time_ms = excluded.response_time_ms, content_type = excluded.content_type,
+                content_length = excluded.content_length, status_bucket = excluded.status_bucket,
+                status_classification = excluded.status_classification, remark = excluded.remark,
+                image_issue = excluded.image_issue, error_type = excluded.error_type,
+                error_message = excluded.error_message, robots_status = excluded.robots_status,
+                waf_status = excluded.waf_status, checked_at = excluded.checked_at
+            """,
+            img_updates,
+        )
 
     def _flush_dest_batch_sync(self, dest_updates: List[Dict[str, Any]]):
         if not dest_updates:
@@ -1415,15 +1694,16 @@ class OnPageAuditEngine:
                 initial_http_status, http_status, final_url, redirect_count,
                 redirect_chain, response_time_ms, content_type, status_bucket,
                 status_classification, remark, error_type, error_message,
-                robots_status, waf_status, first_seen_source_url, reuse_count, referenced, checked_at
+                robots_status, waf_status, first_seen_source_url, reuse_count, referenced, checked_at, seeded_by
             ) VALUES (
                 :job_id, :normalized_url, :url_scope, :validation_state,
                 :initial_http_status, :http_status, :final_url, :redirect_count,
                 :redirect_chain, :response_time_ms, :content_type, :status_bucket,
                 :status_classification, :remark, :error_type, :error_message,
-                :robots_status, :waf_status, '', 0, 1, :checked_at
+                :robots_status, :waf_status, '', 0, 1, :checked_at, 'DEST_CHECK'
             )
             ON CONFLICT(job_id, normalized_url) DO UPDATE SET
+                seeded_by = 'DEST_CHECK',
                 validation_state = excluded.validation_state,
                 initial_http_status = excluded.initial_http_status,
                 http_status = excluded.http_status,
@@ -1516,7 +1796,7 @@ class OnPageAuditEngine:
                 """
                 SELECT COUNT(DISTINCT normalized_found_url)
                 FROM on_page_link_relationships
-                WHERE job_id = ? AND found_url_scope IN ('NON_HTTP', 'FRAGMENT')
+                WHERE job_id = ? AND found_url_scope IN ('NON_HTTP', 'FRAGMENT', 'INVALID')
                 """,
                 (self.job_id,),
             ).fetchone()[0]
@@ -1534,7 +1814,9 @@ class OnPageAuditEngine:
                 ).fetchone()
                 cur_status = row[0] if row else "RUNNING"
 
+            img_stats = self._image_aggregates()
             with self.conn:
+                self._write_image_job_cols(img_stats, now)
                 self.conn.execute(
                     """
                     UPDATE on_page_audit_jobs SET
@@ -1615,6 +1897,7 @@ class OnPageAuditEngine:
                 "unique_http_destinations_excluded": dest_excluded,
                 "new_http_validations": new_checks,
                 "reused_http_validations": reused_checks,
+                **img_stats,
                 "updated_at": now,
             }
 
@@ -1637,6 +1920,87 @@ class OnPageAuditEngine:
     # =====================================================================================
     _SRC_STATES = ("PENDING", "COMPLETED", "FAILED", "BLOCKED", "TIMED_OUT", "EXPLICITLY_EXCLUDED")
     _DEST_STATES = ("PENDING", "VALIDATED", "FAILED", "BLOCKED", "TIMED_OUT", "EXPLICITLY_EXCLUDED")
+    _IMG_STATES = ("PENDING", "VALIDATED", "FAILED", "BLOCKED", "TIMED_OUT", "EXPLICITLY_EXCLUDED")
+    _IMG_KEYS = (
+        "image_occurrences_extracted", "image_relationships_persisted", "image_http_relationships",
+        "new_image_validations", "reused_image_validations", "unique_image_urls", "unique_images_validated",
+        "unique_images_failed", "unique_images_blocked", "unique_images_timed_out", "unique_images_pending",
+    )
+
+    def _image_aggregates(self) -> Dict[str, Any]:
+        """Authoritative image populations (full aggregation: start, checkpoints, end only)."""
+        c = self.conn
+        occ = c.execute("SELECT COALESCE(SUM(raw_image_occurrences_count), 0) FROM on_page_source_pages WHERE job_id = ?",
+                        (self.job_id,)).fetchone()[0]
+        vs = Counter(dict(c.execute(
+            "SELECT validation_source, COUNT(*) FROM on_page_image_relationships WHERE job_id = ? GROUP BY validation_source",
+            (self.job_id,)).fetchall()))
+        st = Counter(dict(c.execute(
+            "SELECT validation_state, COUNT(*) FROM on_page_image_validation_cache WHERE job_id = ? GROUP BY validation_state",
+            (self.job_id,)).fetchall()))
+        return self._img_stats_from_counts(occ, sum(vs.values()), vs, st)
+
+    def _img_stats_from_counts(self, occ: int, rel: int, vs: Counter, st: Counter) -> Dict[str, Any]:
+        return {
+            "image_occurrences_extracted": occ,
+            "image_relationships_persisted": rel,
+            "image_http_relationships": vs["NEW_CHECK"] + vs["REUSED"],
+            "new_image_validations": vs["NEW_CHECK"],
+            "reused_image_validations": vs["REUSED"],
+            "unique_image_urls": sum(st[k] for k in self._IMG_STATES),
+            "unique_images_validated": st["VALIDATED"],
+            "unique_images_failed": st["FAILED"],
+            "unique_images_blocked": st["BLOCKED"],
+            "unique_images_timed_out": st["TIMED_OUT"],
+            "unique_images_pending": st["PENDING"],
+            "image_skipped_relationships": rel - vs["NEW_CHECK"] - vs["REUSED"],
+        }
+
+    def _write_image_job_cols(self, st: Dict[str, Any], now: str):
+        self.conn.execute(
+            """UPDATE on_page_audit_jobs SET image_occurrences_extracted = ?, image_relationships_persisted = ?,
+                   unique_image_urls = ?, unique_images_validated = ?, unique_images_failed = ?,
+                   unique_images_blocked = ?, unique_images_timed_out = ?, unique_images_pending = ?,
+                   new_image_validations = ?, reused_image_validations = ?, live_metrics = ?
+               WHERE job_id = ?""",
+            (st["image_occurrences_extracted"], st["image_relationships_persisted"], st["unique_image_urls"],
+             st["unique_images_validated"], st["unique_images_failed"], st["unique_images_blocked"],
+             st["unique_images_timed_out"], st["unique_images_pending"], st["new_image_validations"],
+             st["reused_image_validations"], json.dumps(self.live_metrics(st), default=str), self.job_id),
+        )
+
+    def live_metrics(self, st: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Realtime rates/ETA for the UI. Each progress uses ITS OWN population as denominator."""
+        m = self.metrics
+        el = max(1e-6, time.monotonic() - m["started_monotonic"])
+        st = st or {}
+        src_done = self._run_sources_done
+        src_left = (self._mirror.get("src") or Counter()).get("PENDING", 0) if self._mirror else 0
+        pps = src_done / el
+        k = m["requests_by_kind"]
+        return {
+            "elapsed_sec": round(el, 1),
+            "source_pages_per_sec": round(pps, 2),
+            "url_validations_per_sec": round(m["dest_validations"] / el, 2),
+            "image_validations_per_sec": round(m["image_validations"] / el, 2),
+            "total_requests_per_sec": round(m["http_requests"] / el, 2),
+            "source_request_rate": round(k["source"] / el, 2),
+            "url_request_rate": round(k["url"] / el, 2),
+            "image_request_rate": round(k["image"] / el, 2),
+            "primary_requests_per_sec": round(m["primary_requests"] / el, 2),
+            "eta_sources_sec": round(src_left / pps, 0) if pps > 0 else None,
+            "url_validations_pending": self._dest_outstanding + len(self._awaiting_source),
+            "image_validations_pending": self._img_outstanding,
+            "current_target_rps": self.target_rps,
+            "cooldowns": self.cooldown_count,
+            "waf_events": m["waf_events"],
+            "robots_blocks": m["robots_blocked"],
+            "timeouts": m["timeouts"],
+            "network_errors": m["network_errors"],
+            "status_403": m["status_403"],
+            "status_429": m["status_429"],
+        }
+
     _MIRROR_KEYS = (
         "source_pages_total", "source_pages_pending", "source_pages_completed", "source_pages_failed",
         "source_pages_blocked", "source_pages_timed_out", "source_pages_explicitly_excluded",
@@ -1644,6 +2008,9 @@ class OnPageAuditEngine:
         "unique_http_destinations", "unique_http_destinations_validated", "unique_http_destinations_failed",
         "unique_http_destinations_blocked", "unique_http_destinations_timed_out",
         "unique_http_destinations_excluded", "new_http_validations", "reused_http_validations",
+        "image_occurrences_extracted", "image_relationships_persisted", "new_image_validations",
+        "reused_image_validations", "unique_image_urls", "unique_images_validated", "unique_images_failed",
+        "unique_images_blocked", "unique_images_timed_out", "unique_images_pending",
     )
 
     def _mirror_from_stats(self, stats: Dict[str, Any]):
@@ -1655,7 +2022,7 @@ class OnPageAuditEngine:
         nonhttp = {
             r[0] for r in self.conn.execute(
                 "SELECT DISTINCT normalized_found_url FROM on_page_link_relationships "
-                "WHERE job_id = ? AND found_url_scope IN ('NON_HTTP', 'FRAGMENT')",
+                "WHERE job_id = ? AND found_url_scope IN ('NON_HTTP', 'FRAGMENT', 'INVALID')",
                 (self.job_id,),
             ).fetchall()
         }
@@ -1680,6 +2047,22 @@ class OnPageAuditEngine:
                 "EXPLICITLY_EXCLUDED": stats["unique_http_destinations_excluded"],
             }),
             "nonhttp": nonhttp,
+        }
+        vs = Counter(dict(self.conn.execute(
+            "SELECT validation_source, COUNT(*) FROM on_page_image_relationships WHERE job_id = ? GROUP BY validation_source",
+            (self.job_id,)).fetchall()))
+        self._img_mirror = {
+            "occ": stats["image_occurrences_extracted"],
+            "rel": stats["image_relationships_persisted"],
+            "valsrc": vs,
+            "state": Counter({
+                "PENDING": stats["unique_images_pending"], "VALIDATED": stats["unique_images_validated"],
+                "FAILED": stats["unique_images_failed"], "BLOCKED": stats["unique_images_blocked"],
+                "TIMED_OUT": stats["unique_images_timed_out"],
+                "EXPLICITLY_EXCLUDED": stats["unique_image_urls"] - stats["unique_images_pending"]
+                - stats["unique_images_validated"] - stats["unique_images_failed"]
+                - stats["unique_images_blocked"] - stats["unique_images_timed_out"],
+            }),
         }
         self._mirror_dirty = False
 
@@ -1716,10 +2099,16 @@ class OnPageAuditEngine:
 
     def _mirror_stats(self) -> Dict[str, Any]:
         m = self._mirror
-        return self._stats_from_counts(m["src"], m["occ"], m["rel"], m["valsrc"], m["dest"], len(m["nonhttp"]), self._job_status)
+        st = self._stats_from_counts(m["src"], m["occ"], m["rel"], m["valsrc"], m["dest"], len(m["nonhttp"]), self._job_status)
+        im = self._img_mirror
+        if im:
+            st.update(self._img_stats_from_counts(im["occ"], im["rel"], im["valsrc"], im["state"]))
+        return st
 
     def _write_job_row(self, st: Dict[str, Any]):
         """Single-row UPDATEs (O(1)) — what the realtime UI polls. Runs inside caller's txn."""
+        if "unique_image_urls" in st:
+            self._write_image_job_cols(st, st["updated_at"])
         self.conn.execute(
             """
             UPDATE on_page_audit_jobs SET
@@ -1760,6 +2149,10 @@ class OnPageAuditEngine:
         self_seeds: List[Dict[str, Any]],
         dest_updates: List[Dict[str, Any]],
         status: str,
+        img_rels: Optional[List[Dict[str, Any]]] = None,
+        img_seeds: Optional[List[Dict[str, Any]]] = None,
+        img_incs: Optional[Counter] = None,
+        img_updates: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         One SQLite transaction for everything buffered (source pages + relationships + cache seeds +
@@ -1819,7 +2212,7 @@ class OnPageAuditEngine:
                 occ += int(su["raw_occurrences_count"] or 0)
             d_val = Counter(r["validation_source"] for r in rels)
             nonhttp_new = {
-                r["normalized_found_url"] for r in rels if r["found_url_scope"] in ("NON_HTTP", "FRAGMENT")
+                r["normalized_found_url"] for r in rels if r["found_url_scope"] in ("NON_HTTP", "FRAGMENT", "INVALID")
             } - self._mirror["nonhttp"]
 
             m = self._mirror
@@ -1831,17 +2224,62 @@ class OnPageAuditEngine:
             for k, v in d_val.items():
                 val_c[k] += v
 
+            # ---- image deltas (image cache rows are created only by NEW_CHECK seeds / results)
+            img_overlay: Dict[str, Optional[str]] = {}
+
+            def icur(u: str) -> Optional[str]:
+                if u not in img_overlay:
+                    img_overlay[u] = self._w_img_cache.get(u)
+                return img_overlay[u]
+
+            d_img: Counter = Counter()
+            for sd in (img_seeds or []):
+                u = sd["normalized_url"]
+                if icur(u) is None:
+                    img_overlay[u] = "PENDING"
+                    d_img["PENDING"] += 1
+            for r in (img_updates or []):
+                u, stt = r["normalized_url"], r["validation_state"]
+                prev = icur(u)
+                if prev is not None:
+                    d_img[prev] -= 1
+                d_img[stt] += 1
+                img_overlay[u] = stt
+            img_occ = sum(int(su.get("raw_image_occurrences_count") or 0) for su in src_updates)
+            d_ival = Counter(r["validation_source"] for r in (img_rels or []))
+            im = self._img_mirror
+            ist_c = Counter(im["state"]); ival_c = Counter(im["valsrc"])
+            for k, v in d_img.items():
+                ist_c[k] += v
+            for k, v in d_ival.items():
+                ival_c[k] += v
+
             with self.conn:
-                rc = self._write_source_parts(src_updates, rels, seeds, incs, self_seeds)
+                rc, irc = self._write_source_parts(src_updates, rels, seeds, incs, self_seeds,
+                                                   img_rels, img_seeds, img_incs)
                 if dest_updates:
                     self._write_dest_parts(dest_updates)
+                if img_updates:
+                    self._write_image_parts(img_updates)
                 stats = self._stats_from_counts(
                     src_c, m["occ"] + occ, m["rel"] + rc, val_c, dest_c, len(m["nonhttp"]) + len(nonhttp_new), status
                 )
+                stats.update(self._img_stats_from_counts(im["occ"] + img_occ, im["rel"] + irc, ival_c, ist_c))
                 self._write_job_row(stats)
-            return overlay, src_c, occ, rc, val_c, dest_c, nonhttp_new, stats
+            return (overlay, src_c, occ, rc, val_c, dest_c, nonhttp_new, stats,
+                    img_overlay, ist_c, ival_c, img_occ, irc)
 
-        overlay, src_c, occ, rc, val_c, dest_c, nonhttp_new, stats = self._exec_with_retry(_do)
+        (overlay, src_c, occ, rc, val_c, dest_c, nonhttp_new, stats,
+         img_overlay, ist_c, ival_c, img_occ, irc) = self._exec_with_retry(_do)
+        for u, e in img_overlay.items():
+            if e is not None:
+                self._w_img_cache[u] = e
+        im = self._img_mirror
+        im["state"], im["valsrc"] = ist_c, ival_c
+        im["occ"] += img_occ
+        im["rel"] += irc
+        if irc != len(img_rels or []):
+            self._mirror_dirty = True
         for u, e in overlay.items():
             if e is not None:
                 self._w_cache[u] = e
@@ -1866,6 +2304,9 @@ class OnPageAuditEngine:
                 self.metrics["reconciliation_mismatches"] += 1
                 print(f"[RECONCILE] mirror != DB, adopting DB values: {diffs}", flush=True)
             self._mirror_from_stats(db_stats)
+            self._w_img_cache = {r[0]: r[1] for r in self.conn.execute(
+                "SELECT normalized_url, validation_state FROM on_page_image_validation_cache WHERE job_id = ?",
+                (self.job_id,)).fetchall()}
             self._w_cache = {
                 r[0]: [r[1], r[2]] for r in self.conn.execute(
                     "SELECT normalized_url, validation_state, referenced FROM on_page_validation_cache WHERE job_id = ?",
@@ -1987,6 +2428,78 @@ class OnPageAuditEngine:
                 fut.exception()  # mark retrieved
             raise
 
+    # -------------------------------- image registry (separate cache, same single-flight rules)
+    @staticmethod
+    def _image_issue(url: str, res: Dict[str, Any]) -> str:
+        st = res.get("http_status")
+        if res.get("terminal_state") != "VALIDATED" or st is None or not (200 <= st <= 299):
+            return ""
+        ct = (res.get("content_type") or "").split(";")[0].strip().lower()
+        path = urllib.parse.urlsplit(url).path.lower()
+        looks_image = path.endswith(IMAGE_EXTENSIONS)
+        if ct and not ct.startswith("image/"):
+            if looks_image:
+                return f"CONTENT_TYPE_MISMATCH: URL looks like an image but Content-Type is '{ct}'"
+            return f"NOT_AN_IMAGE_CONTENT_TYPE: Content-Type is '{ct}'"
+        if res.get("content_length") == 0:
+            return "EMPTY_IMAGE: Content-Length is 0"
+        return ""
+
+    def _image_record(self, url: str, image_type: str, internal_external: str, res: Dict[str, Any]) -> Dict[str, Any]:
+        rec = self._dest_record(url, "", res)
+        rec.pop("url_scope", None)
+        rec.update(image_type=image_type, internal_external=internal_external,
+                   content_length=res.get("content_length"), image_issue=self._image_issue(url, res))
+        return rec
+
+    def _img_done(self):
+        self._img_outstanding -= 1
+        if self._img_outstanding <= 0:
+            self._img_outstanding = 0
+            if self._img_idle is not None:
+                self._img_idle.set()
+
+    async def _complete_image(self, url: str, rec: Dict[str, Any]):
+        self._img_state[url] = rec["validation_state"]
+        fut = self._img_inflight.pop(url, None)
+        if fut is not None and not fut.done():
+            fut.set_result(rec)
+        if getattr(self, "_write_q", None) is not None:
+            await self._write_q.put(("image", rec))
+
+    async def _schedule_image(self, url: str, image_type: str, internal_external: str):
+        if url in self._img_state or url in self._img_inflight:
+            return
+        self._img_inflight[url] = asyncio.get_running_loop().create_future()
+        self._img_outstanding += 1
+        self._img_idle.clear()
+        await self._img_q.put({"normalized_url": url, "image_type": image_type,
+                               "internal_external": internal_external, "waf_requeues": 0})
+
+    async def validate_image(self, client: httpx.AsyncClient, url: str, image_type: str = "HTTPS_IMAGE",
+                             internal_external: str = "INTERNAL_IMAGE") -> Dict[str, Any]:
+        """Single-flight image validation (shares the registry with the pipeline's image workers)."""
+        if url in self._img_state:
+            return {"normalized_url": url, "validation_state": self._img_state[url], "reused": True}
+        fut = self._img_inflight.get(url)
+        if fut is not None:
+            return await asyncio.shield(fut)
+        fut = asyncio.get_running_loop().create_future()
+        self._img_inflight[url] = fut
+        try:
+            res = await self.fetch_url_manual_redirects(client, url, need_body=False, kind="image",
+                                                        discard_limit=self.image_discard_body_limit)
+            self.metrics["image_validations"] += 1
+            rec = self._image_record(url, image_type, internal_external, res)
+            await self._complete_image(url, rec)
+            return rec
+        except BaseException as e:
+            self._img_inflight.pop(url, None)
+            if not fut.done():
+                fut.set_exception(e)
+                fut.exception()
+            raise
+
     def request_stop(self):
         """Graceful interruption: stop feeding sources, finish in-flight work, flush, return.
         Queued-but-unstarted destinations stay PENDING in the DB and are rescheduled on resume."""
@@ -1995,12 +2508,16 @@ class OnPageAuditEngine:
     def _parse_and_classify(self, src_url: str, final_url: str, html: str):
         """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title."""
         raw_occ, rels, parser = extract_on_page_urls(src_url, final_url, html)
+        raw_img, img_rels = 0, []
+        if self.audit_images:
+            source_host = (urllib.parse.urlsplit(final_url or src_url).hostname or "").lower()
+            raw_img, img_rels = extract_on_page_images(parser, source_host)   # same Parser instance
         t1, t2, _ = self.classifier.extract_meta_tags(html[:32768], parser=None)
         if t1 and t2:
-            return raw_occ, rels, t2, t1, "META_TAG", t1, t2
+            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels
         clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
         return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
-                clf.method, clf.tag_1, clf.tag_2)
+                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels)
 
     def performance_summary(self) -> Dict[str, Any]:
         m = self.metrics
@@ -2045,6 +2562,13 @@ class OnPageAuditEngine:
             "reconciliations": m["reconciliations"],
             "reconciliation_mismatches": m["reconciliation_mismatches"],
             "rps_history": m["rps_history"][-50:],
+            "image_validations_http": m["image_validations"],
+            "image_validations_per_sec": round(m["image_validations"] / elapsed, 2),
+            "image_skipped_already_validated": m["image_validations_skipped_cached"],
+            "requests_by_kind": dict(m["requests_by_kind"]),
+            "primary_requests_by_kind": dict(m["primary_requests_by_kind"]),
+            "request_rate_by_kind": {k: round(v / elapsed, 2) for k, v in m["requests_by_kind"].items()},
+            "robots_blocked": m["robots_blocked"],
         }
 
     def _write_progress_json(self, stats: Dict[str, Any]):
@@ -2072,6 +2596,10 @@ class OnPageAuditEngine:
         incs: Counter = Counter()
         sseeds: List[Dict[str, Any]] = []
         dests: List[Dict[str, Any]] = []
+        irels: List[Dict[str, Any]] = []
+        iseeds: List[Dict[str, Any]] = []
+        iincs: Counter = Counter()
+        iupd: List[Dict[str, Any]] = []
         force = False
         last_flush = time.monotonic()
         last_reconcile = time.monotonic()
@@ -2092,8 +2620,11 @@ class OnPageAuditEngine:
             else:
                 kind = pkt[0]
                 if kind == "source":
-                    _, su, rr, sd, ic = pkt
+                    _, su, rr, sd, ic, ir, isd, iic = pkt
                     src_u.append(su); rels.extend(rr); seeds.extend(sd); incs.update(ic)
+                    irels.extend(ir); iseeds.extend(isd); iincs.update(iic)
+                elif kind == "image":
+                    iupd.append(pkt[1])
                 elif kind == "seed":
                     sseeds.append(pkt[1])
                 elif kind == "dest":
@@ -2102,23 +2633,27 @@ class OnPageAuditEngine:
                     force = True
             m["write_q_peak"] = max(m["write_q_peak"], q.qsize())
             now = time.monotonic()
-            pending = len(src_u) + len(sseeds) + len(dests)
+            pending = len(src_u) + len(sseeds) + len(dests) + len(iupd)
             due = (
                 done or force
                 or len(src_u) >= self.batch_size
-                or (len(sseeds) + len(dests)) >= self.batch_size * 4
+                or (len(sseeds) + len(dests) + len(iupd)) >= self.batch_size * 4
                 or (pending and now - last_flush >= self.flush_interval_sec)
             )
             if due and (pending or force or done):
                 t0 = time.perf_counter()
                 stats = await asyncio.to_thread(
-                    self._flush_pipeline_sync, src_u, rels, seeds, incs, sseeds, dests, self._job_status
+                    self._flush_pipeline_sync, src_u, rels, seeds, incs, sseeds, dests, self._job_status,
+                    irels, iseeds, iincs, iupd,
                 )
                 self._reservoir_add(m["db_flush_ms"], (time.perf_counter() - t0) * 1000.0)
                 m["db_flushes"] += 1
-                m["db_rows_written"] += len(src_u) * 2 + len(rels) + len(seeds) + len(sseeds) + len(dests) * 2
+                m["db_rows_written"] += (len(src_u) * 2 + len(rels) + len(seeds) + len(sseeds) + len(dests) * 2
+                                         + len(irels) + len(iseeds) + len(iupd))
                 src_u, rels, seeds, sseeds, dests = [], [], [], [], []
+                irels, iseeds, iupd = [], [], []
                 incs = Counter()
+                iincs = Counter()
                 force = False
                 last_flush = time.monotonic()
                 if now - last_progress >= self.progress_interval_sec or done:
@@ -2141,7 +2676,7 @@ class OnPageAuditEngine:
                         flush=True,
                     )
                     last_log = now
-            buffered = len(src_u) + len(sseeds) + len(dests)
+            buffered = len(src_u) + len(sseeds) + len(dests) + len(iupd)
             if not done and self.reconcile_interval_sec and now - last_reconcile >= self.reconcile_interval_sec and not buffered:
                 await asyncio.to_thread(self._reconcile_mirror_sync)
                 last_reconcile = time.monotonic()
@@ -2177,6 +2712,23 @@ class OnPageAuditEngine:
         self._inflight = {}
         self._awaiting_source = {}
         self._dest_outstanding = 0
+        self._source_seeded = set()
+        # images: VALIDATED/terminal -> reuse; PENDING (incl. in flight when a previous process died) -> retry
+        self._w_img_cache, self._img_state, self._img_seen = {}, {}, set()
+        self._img_pending_refs: List[Tuple[str, str, str]] = []
+        for u, st, it, ie in self.conn.execute(
+            "SELECT normalized_url, validation_state, image_type, internal_external FROM on_page_image_validation_cache WHERE job_id = ?",
+            (self.job_id,),
+        ):
+            self._w_img_cache[u] = st
+            self._img_seen.add(u)
+            if st == "PENDING":
+                self._img_pending_refs.append((u, it, ie))
+            else:
+                self._img_state[u] = st
+        self._img_inflight = {}
+        self._img_outstanding = 0
+        self._img_rels_discovered = self._img_mirror.get("rel", 0) if self._img_mirror else 0
         return pending_refs
 
     async def run(self, max_source_pages_this_run: Optional[int] = None) -> Dict[str, Any]:
@@ -2216,7 +2768,7 @@ class OnPageAuditEngine:
         ]
         print(f"[PIPELINE] Pending source pages: {len(pending_sources):,} | resumed PENDING destinations: {len(pending_refs):,}", flush=True)
 
-        max_conn = max(self.source_concurrency, self.dest_concurrency) * 2
+        max_conn = self.max_connections or (max(self.source_concurrency, self.dest_concurrency, self.image_concurrency) * 2)
         limits = httpx.Limits(
             max_connections=max_conn,
             # keep every connection we are allowed to open alive: churning primary keep-alive
@@ -2252,6 +2804,10 @@ class OnPageAuditEngine:
             self._write_q = asyncio.Queue(maxsize=2000)
             self._dest_idle = asyncio.Event()
             self._dest_idle.set()
+            self._img_q = asyncio.Queue(maxsize=20000)
+            self._img_idle = asyncio.Event()
+            self._img_idle.set()
+            img_q = self._img_q
             src_idle = asyncio.Event()
             src_outstanding = 0
             requeue_sources: List[Dict[str, Any]] = []
@@ -2299,6 +2855,7 @@ class OnPageAuditEngine:
                         "first_seen_source_url": item["source_page_url"], "checked_at": now_iso,
                     }
                     self._dest_state[norm] = res["terminal_state"]
+                    self._source_seeded.add(norm)
                     self.metrics["source_seeded_validations"] += 1
                     self._awaiting_source.pop(norm, None)
                     fut = self._inflight.get(norm)
@@ -2318,7 +2875,7 @@ class OnPageAuditEngine:
                     handed_off = False
                     try:
                         norm_src = item["normalized_source_url"]
-                        res = await self.fetch_url_manual_redirects(client, norm_src, need_body=True)
+                        res = await self.fetch_url_manual_redirects(client, norm_src, need_body=True, kind="source")
                         self.metrics["source_fetches"] += 1
                         if res["is_primary_waf"]:
                             trigger = self._note_primary_waf()
@@ -2357,8 +2914,10 @@ class OnPageAuditEngine:
                         now_iso = utc_now_iso()
                         raw_occ = 0
                         extracted_rels: List[Dict[str, Any]] = []
+                        raw_img, extracted_imgs = 0, []
                         if html:
-                            raw_occ, extracted_rels, biz, pt, clf_method, tag_1, tag_2 = await loop.run_in_executor(
+                            (raw_occ, extracted_rels, biz, pt, clf_method, tag_1, tag_2,
+                             raw_img, extracted_imgs) = await loop.run_in_executor(
                                 parse_pool, self._parse_and_classify, src_url, final_src_url, html
                             )
                         else:
@@ -2380,6 +2939,7 @@ class OnPageAuditEngine:
                         for er in extracted_rels:
                             norm_found = er["normalized_found_url"]
                             scope = er["found_url_scope"]
+                            val_detail = None
                             if er["is_http"]:
                                 if norm_found not in self._seen_http_dests:
                                     self._seen_http_dests.add(norm_found)
@@ -2396,9 +2956,16 @@ class OnPageAuditEngine:
                                     val_src = "REUSED"
                                     rel_remark = "Already validated; reused existing result"
                                     reuse_incs[norm_found] += 1
+                                    if norm_found in self._inflight or norm_found in self._awaiting_source:
+                                        # result not known yet: this relationship joins the in-flight validation
+                                        rel_remark = "Validation in flight; joined the single in-flight result"
+                                        val_detail = "IN_FLIGHT_REUSED"
                             elif scope == "FRAGMENT":
                                 val_src = "FRAGMENT_SKIPPED"
                                 rel_remark = "Fragment-only URL — excluded from HTTP validation"
+                            elif scope == "INVALID":
+                                val_src = "INVALID_SKIPPED"
+                                rel_remark = "Invalid URL (malformed host/port/whitespace) — not requested"
                             else:
                                 val_src = "NON_HTTP_SKIPPED"
                                 sch = er.get("non_http_scheme") or er["url_syntax_type"].lower()
@@ -2425,8 +2992,52 @@ class OnPageAuditEngine:
                                 "language": item["language"],
                                 "page_type": pt,
                                 "validation_source": val_src,
+                                "validation_detail": val_detail or val_src,
                                 "remark": rel_remark,
                                 "extracted_at": now_iso,
+                            })
+
+                        # ---- images: same three-level dedup, separate cache; alt text never in the key
+                        img_rows: List[Dict[str, Any]] = []
+                        img_seeds: List[Dict[str, Any]] = []
+                        img_incs: Counter = Counter()
+                        new_imgs: List[Tuple[str, str, str]] = []
+                        for ir in extracted_imgs:
+                            n_img = ir["normalized_image_url"]
+                            i_detail = None
+                            if ir["is_http"]:
+                                if n_img not in self._img_seen:
+                                    self._img_seen.add(n_img)
+                                    i_src, i_remark = "NEW_CHECK", ""
+                                    img_seeds.append({"job_id": self.job_id, "normalized_url": n_img,
+                                                      "image_type": ir["image_type"],
+                                                      "internal_external": ir["internal_external"],
+                                                      "first_seen_source_url": src_url})
+                                    new_imgs.append((n_img, ir["image_type"], ir["internal_external"]))
+                                else:
+                                    i_src, i_remark = "REUSED", "Image already validated; reused existing result"
+                                    img_incs[n_img] += 1
+                                    if n_img in self._img_inflight:
+                                        i_detail = "IN_FLIGHT_REUSED"
+                                        i_remark = "Image validation in flight; joined the single in-flight result"
+                            elif ir["image_type"] == "NON_HTTP_IMAGE":
+                                i_src, i_remark = "NON_HTTP_SKIPPED", "Non-HTTP image (e.g. data: URI) — not requested"
+                            else:
+                                i_src, i_remark = "INVALID_SKIPPED", "Invalid image URL — not requested"
+                            ap = ir["alt_present"]
+                            img_rows.append({
+                                "job_id": self.job_id, "source_page_url": src_url, "source_page_status": src_http,
+                                "source_page_final_url": final_src_url, "image_url": ir["image_url"],
+                                "normalized_image_url": n_img, "image_type": ir["image_type"],
+                                "internal_external": ir["internal_external"],
+                                "attribute_source": "|".join(ir["attribute_sources"]),
+                                "alt_present": -1 if ap is None else int(bool(ap)), "alt_text": ir["alt_text"],
+                                "width": ir["width"], "height": ir["height"], "loading": ir["loading"],
+                                "occurrence_count": ir["occurrence_count"],
+                                "representative_location": ir["representative_location"],
+                                "business": biz, "language": item["language"], "page_type": pt,
+                                "validation_source": i_src, "validation_detail": i_detail or i_src,
+                                "remark": i_remark, "extracted_at": now_iso,
                             })
 
                         src_update = {
@@ -2452,15 +3063,21 @@ class OnPageAuditEngine:
                             "tag_2": tag_2,
                             "raw_occurrences_count": raw_occ,
                             "relationships_count": len(rel_rows),
+                            "raw_image_occurrences_count": raw_img,
+                            "image_relationships_count": len(img_rows),
                             "remark": fetch_res["remark"],
                             "checked_at": now_iso,
                         }
                         self._rels_discovered += len(rel_rows)
-                        # Seeds are enqueued to the writer BEFORE any destination result can exist.
-                        await write_q.put(("source", src_update, rel_rows, cache_seeds, reuse_incs))
+                        self._img_rels_discovered += len(img_rows)
+                        # Seeds are enqueued to the writer BEFORE any destination/image result can exist.
+                        await write_q.put(("source", src_update, rel_rows, cache_seeds, reuse_incs,
+                                           img_rows, img_seeds, img_incs))
                         self._run_sources_done += 1
                         for u, sc in new_dests:
                             await self._schedule_destination(u, sc)
+                        for u, it, ie in new_imgs:
+                            await self._schedule_image(u, it, ie)
                     except Exception as e:
                         print(f"[PIPELINE] parse/persist error for {item.get('source_page_url')}: {e!r} (left PENDING)", flush=True)
                     finally:
@@ -2485,7 +3102,7 @@ class OnPageAuditEngine:
                                 self.metrics["dest_validations_skipped_cached"] += 1
                             self._dest_done()
                             continue
-                        res = await self.fetch_url_manual_redirects(client, url, need_body=False)
+                        res = await self.fetch_url_manual_redirects(client, url, need_body=False, kind="url")
                         self.metrics["dest_validations"] += 1
                         if res["is_primary_waf"]:
                             trigger = self._note_primary_waf()
@@ -2510,6 +3127,50 @@ class OnPageAuditEngine:
                             fut.cancel()
                         self._dest_done()
 
+            async def image_worker():
+                while True:
+                    item = await img_q.get()
+                    if item is None:
+                        break
+                    url = item["normalized_url"]
+                    try:
+                        if url in self._img_state or self._stop_requested:
+                            fut = self._img_inflight.pop(url, None)
+                            if fut is not None and not fut.done():
+                                if url in self._img_state:
+                                    fut.set_result({"normalized_url": url, "validation_state": self._img_state[url], "reused": True})
+                                else:
+                                    fut.cancel()
+                            if url in self._img_state:
+                                self.metrics["image_validations_skipped_cached"] += 1
+                            self._img_done()
+                            continue
+                        res = await self.fetch_url_manual_redirects(client, url, need_body=False, kind="image",
+                                                                    discard_limit=self.image_discard_body_limit)
+                        self.metrics["image_validations"] += 1
+                        if res["is_primary_waf"]:
+                            trigger = self._note_primary_waf()
+                            if item["waf_requeues"] < 2:
+                                item["waf_requeues"] += 1
+                                if trigger:
+                                    await self._trigger_primary_cooldown(client)
+                                t = asyncio.create_task(img_q.put(item))
+                                self._bg_tasks.add(t)
+                                t.add_done_callback(self._bg_tasks.discard)
+                                continue
+                            elif trigger:
+                                await self._trigger_primary_cooldown(client)
+                        elif self._is_primary_host(url):
+                            self._note_primary_result(res)
+                        await self._complete_image(url, self._image_record(url, item["image_type"], item["internal_external"], res))
+                        self._img_done()
+                    except Exception as e:
+                        print(f"[PIPELINE] image error for {url}: {e!r} (left PENDING)", flush=True)
+                        fut = self._img_inflight.pop(url, None)
+                        if fut is not None and not fut.done():
+                            fut.cancel()
+                        self._img_done()
+
             writer_t = asyncio.create_task(self._writer_loop(write_q))
             run_task = asyncio.current_task()
 
@@ -2522,12 +3183,15 @@ class OnPageAuditEngine:
 
             writer_t.add_done_callback(_writer_died)
             dest_tasks = [asyncio.create_task(dest_worker()) for _ in range(self.dest_concurrency)]
+            img_tasks = [asyncio.create_task(image_worker()) for _ in range(self.image_concurrency)]
             fetch_tasks: List[asyncio.Task] = []
             parse_tasks: List[asyncio.Task] = []
             try:
                 # Resume: re-register referenced destinations that were still PENDING
                 for u, sc in pending_refs:
                     await self._schedule_destination(u, sc)
+                for u, it, ie in self._img_pending_refs:
+                    await self._schedule_image(u, it, ie)
 
                 fetch_tasks = [asyncio.create_task(fetch_worker()) for _ in range(self.source_concurrency)]
                 parse_tasks = [asyncio.create_task(parse_worker()) for _ in range(self.parse_workers)]
@@ -2545,13 +3209,16 @@ class OnPageAuditEngine:
                         self._pending_source_norms.discard(u)
                         await self._schedule_destination(u, sc)
 
-                if self._dest_outstanding:
+                if self._dest_outstanding or self._img_outstanding:
                     self._job_status = "VALIDATING"
                     await write_q.put(("status",))
                 await self._dest_idle.wait()
+                await self._img_idle.wait()
                 for _ in dest_tasks:
                     await dest_q.put(None)
-                await asyncio.gather(*dest_tasks)
+                for _ in img_tasks:
+                    await img_q.put(None)
+                await asyncio.gather(*dest_tasks, *img_tasks)
                 if self._bg_tasks:
                     await asyncio.gather(*list(self._bg_tasks), return_exceptions=True)
             except asyncio.CancelledError:
@@ -2559,7 +3226,7 @@ class OnPageAuditEngine:
                     raise RuntimeError("on-page audit DB writer failed; run aborted (resumable)") from writer_t.exception()
                 raise
             finally:
-                for t in fetch_tasks + parse_tasks + dest_tasks + list(self._bg_tasks):
+                for t in fetch_tasks + parse_tasks + dest_tasks + img_tasks + list(self._bg_tasks):
                     if not t.done():
                         t.cancel()
                 if not writer_t.done():

@@ -48,6 +48,9 @@ class Edge:
         self.rnd = random.Random(7)
         self.n_extra = max(1, int(a.sources * EXTRA_DEST_RATIO))
         self.page_cache = {}
+        self.inflight = 0
+        self.max_inflight = 0
+        self.conc_blocks = 0
 
     async def send(self, send, status, body=b"", ctype="text/html; charset=utf-8", headers=()):
         hdrs = [(b"content-type", ctype.encode()), (b"content-length", str(len(body)).encode())]
@@ -61,6 +64,7 @@ class Edge:
         path = scope["path"]
         host = dict(scope["headers"]).get(b"host", b"").decode()
         primary = host.startswith("127.0.0.1")
+        cdn = host.startswith("127.0.0.3")
         now = time.monotonic()
         if path == "/__stats":
             ts = self.all_primary
@@ -73,11 +77,12 @@ class Edge:
             return await self.send(send, 200, json.dumps({
                 "kind": self.kind, "total": sum(self.kind.values()), "max_primary_req_in_1s": worst,
                 "waf_403_served": self.waf_served, "waf_blocks": self.blocks,
+                "max_primary_inflight": self.max_inflight, "concurrency_blocks": self.conc_blocks,
                 "duplicate_paths": len(dups), "duplicate_examples": list(dups.items())[:10],
                 "primary_first_ts": ts[0] if ts else 0, "primary_last_ts": ts[-1] if ts else 0,
             }).encode(), "application/json")
 
-        key = ("P" if primary else "X") + path
+        key = ("P" if primary else ("C" if cdn else "X")) + path
         self.hits[key] += 1
         if primary:
             self.all_primary.append(now)
@@ -88,6 +93,11 @@ class Edge:
                 if now >= self.block_until and len(self.primary_times) > self.a.waf_rps * self.a.waf_window:
                     self.block_until = now + self.a.waf_block
                     self.blocks += 1
+                if now >= self.block_until and self.a.waf_conc and self.inflight >= self.a.waf_conc:
+                    # Akamai-like protection against too many simultaneous connections from one client
+                    self.block_until = now + self.a.waf_block
+                    self.blocks += 1
+                    self.conc_blocks += 1
                 if now < self.block_until:
                     self.waf_served += 1
                     self.kind["waf_403"] += 1
@@ -97,15 +107,37 @@ class Edge:
             self.kind["robots"] += 1
             return await self.send(send, 200, b"User-agent: *\nDisallow: /private\n", "text/plain")
 
+        if cdn:
+            self.kind["cdn_image"] += 1
+            await asyncio.sleep(max(0.0, self.rnd.lognormvariate(0, 0.3) * self.a.cdn_latency_ms / 1000.0))
+            if path.startswith("/img/missing/"):
+                return await self.send(send, 404, b"not found")
+            ctype = "image/svg+xml" if path.endswith(".svg") else "image/webp"
+            return await self.send(send, 200, b"I" * 2048, ctype)
+
         lat = self.a.latency_ms / 1000.0
-        await asyncio.sleep(max(0.0, self.rnd.lognormvariate(0, 0.35) * lat))
+        if primary:
+            self.inflight += 1
+            self.max_inflight = max(self.max_inflight, self.inflight)
+        try:
+            # origin degrades past its comfortable concurrency (queueing)
+            knee = max(1, self.a.origin_knee)
+            factor = 1.0 + max(0, self.inflight - knee) / knee if primary else 1.0
+            await asyncio.sleep(max(0.0, self.rnd.lognormvariate(0, 0.35) * lat * factor))
+            return await self._serve(send, path, primary)
+        finally:
+            if primary:
+                self.inflight -= 1
+
+    async def _serve(self, send, path, primary):
 
         if primary and path.startswith("/p/"):
             self.kind["source_page"] += 1
             i = int(path.rsplit("/", 1)[-1])
             body = self.page_cache.get(i)
             if body is None:
-                body = page_html(i, self.a.sources, f"http://127.0.0.1:{self.a.port}", f"http://127.0.0.2:{self.a.port}").encode()
+                body = page_html(i, self.a.sources, f"http://127.0.0.1:{self.a.port}", f"http://127.0.0.2:{self.a.port}",
+                                 f"http://127.0.0.3:{self.a.port}" if self.a.images else "").encode()
                 if len(self.page_cache) < 2000:
                     self.page_cache[i] = body
             return await self.send(send, 200, body)
@@ -117,6 +149,9 @@ class Edge:
             if k % 50 == 1:
                 return await self.send(send, 503, b"<html>busy</html>")
             return await self.send(send, 200, b"<html>" + b"x" * 60000 + b"</html>")
+        if primary and path.startswith("/content/dam/"):
+            self.kind["primary_image"] += 1
+            return await self.send(send, 200, b"<html>not an image</html>")        # mislabelled image
         self.kind["external" if not primary else "other"] += 1
         return await self.send(send, 200, b"<html>ext</html>")
 
@@ -124,7 +159,7 @@ class Edge:
 async def main(a):
     app = Edge(a)
     servers = []
-    for host in ("127.0.0.1", "127.0.0.2"):
+    for host in ("127.0.0.1", "127.0.0.2", "127.0.0.3"):
         cfg = uvicorn.Config(app, host=host, port=a.port, log_level="error", access_log=False, lifespan="off")
         servers.append(uvicorn.Server(cfg))
     await asyncio.gather(*[s.serve() for s in servers])
@@ -138,4 +173,8 @@ if __name__ == "__main__":
     p.add_argument("--waf-rps", type=float, default=0.0)
     p.add_argument("--waf-window", type=float, default=10.0)
     p.add_argument("--waf-block", type=float, default=20.0)
+    p.add_argument("--waf-conc", type=int, default=0, help="block when this many primary requests are in flight (0=off)")
+    p.add_argument("--origin-knee", type=int, default=1000, help="primary in-flight count after which latency grows")
+    p.add_argument("--images", action="store_true")
+    p.add_argument("--cdn-latency-ms", type=float, default=80.0)
     asyncio.run(main(p.parse_args()))

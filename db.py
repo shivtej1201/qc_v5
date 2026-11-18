@@ -475,6 +475,49 @@ class Database:
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_oplr_scope ON on_page_link_relationships(job_id, found_url_scope)")
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_oplr_valsrc ON on_page_link_relationships(job_id, validation_source)")
 
+        # URL-status audit ledger: exactly ONE row per submitted URL (row_no = position in the
+        # submitted sheet), so every input is traceable to a final result or an explicit reason.
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_url_items (
+                job_id TEXT NOT NULL,
+                row_no INTEGER NOT NULL,
+                batch_id TEXT,
+                original_url TEXT NOT NULL,
+                normalized_url TEXT,
+                item_state TEXT NOT NULL DEFAULT 'PENDING',
+                validation_source TEXT NOT NULL DEFAULT 'NEW_CHECK',
+                duplicate_of_row INTEGER,
+                outcome TEXT,
+                validated INTEGER,
+                status TEXT,
+                initial_status_code INTEGER,
+                final_status_code INTEGER,
+                final_url TEXT,
+                redirect_count INTEGER,
+                redirect_chain TEXT,
+                response_time_ms REAL,
+                content_type TEXT,
+                error_type TEXT,
+                error_message TEXT,
+                check_method TEXT,
+                attempts INTEGER DEFAULT 0,
+                checked_at TIMESTAMP,
+                PRIMARY KEY (job_id, row_no)
+            )
+        """)
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_jui_norm ON job_url_items(job_id, normalized_url, row_no)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_jui_batch ON job_url_items(job_id, batch_id, item_state)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_jui_state ON job_url_items(job_id, item_state, validation_source, outcome, validated)")
+
+        # On-page image audit tables/columns (additive; same DDL the engine applies)
+        from on_page_audit_engine import ON_PAGE_IMAGE_SCHEMA_SQL, ON_PAGE_IMAGE_ALTERS
+        await self.conn.executescript(ON_PAGE_IMAGE_SCHEMA_SQL)
+        for stmt in ON_PAGE_IMAGE_ALTERS:
+            try:
+                await self.conn.execute(stmt)
+            except Exception:
+                pass
+
         # Migrations for existing tables
         try:
             await self.conn.execute("ALTER TABLE request_diagnostics ADD COLUMN evidence_type TEXT DEFAULT 'VERIFIED_EVIDENCE'")
@@ -538,10 +581,18 @@ class Database:
                 WHERE worker_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?
             """, (now,))
 
+        # 0. A job still INGESTING at startup was interrupted mid-upload (ingest commits atomically
+        #    at the end, so its rows are incomplete): fail it explicitly instead of leaving it hanging.
+        await self.conn.execute(
+            "UPDATE jobs SET status = 'FAILED', updated_at = ? WHERE status = 'INGESTING'", (now,)
+        )
+
         # 1. Finalize RUNNING jobs that have NO remaining RUNNING or QUEUED batches
+        #    (a URL-status job with PENDING ledger rows is never reported COMPLETED)
         await self.conn.execute("""
             UPDATE jobs SET status = CASE 
                 WHEN id IN (SELECT DISTINCT job_id FROM batches WHERE status = 'FAILED') THEN 'PARTIAL'
+                WHEN EXISTS (SELECT 1 FROM job_url_items i WHERE i.job_id = jobs.id AND i.item_state = 'PENDING') THEN 'PARTIAL'
                 ELSE 'COMPLETED'
             END, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
             WHERE status = 'RUNNING' 
@@ -1984,6 +2035,23 @@ class Database:
         data["reuse_rate_pct"] = (
             round((int(data.get("reused_http_validations") or 0) / http_rels) * 100.0, 2) if http_rels else 0.0
         )
+
+        # Image population: progress over UNIQUE images (its own denominator)
+        img_total = int(data.get("unique_image_urls") or 0)
+        img_pending = int(data.get("unique_images_pending") or 0)
+        data["unique_images_processed"] = img_total - img_pending
+        data["images_progress_pct"] = round(((img_total - img_pending) / img_total) * 100.0, 2) if img_total else 0.0
+        data["url_validations_pending"] = dest_total - dest_done
+        img_rels = int(data.get("new_image_validations") or 0) + int(data.get("reused_image_validations") or 0)
+        data["image_reuse_rate_pct"] = (
+            round((int(data.get("reused_image_validations") or 0) / img_rels) * 100.0, 2) if img_rels else 0.0
+        )
+        live = data.get("live_metrics")
+        if isinstance(live, str) and live:
+            try:
+                data["live_metrics"] = json.loads(live)
+            except ValueError:
+                pass
         return data
 
     async def list_on_page_audits(self) -> List[Dict[str, Any]]:
@@ -1991,4 +2059,244 @@ class Database:
             cols = [desc[0] for desc in cur.description]
             return [dict(zip(cols, r)) for r in await cur.fetchall()]
 
+    # =========================================================================================
+    # URL-status audit ledger (job_url_items)
+    # =========================================================================================
+    _JUI_COLS = None
+    _URL_ITEM_RESULT_COLS = (
+        "outcome", "validated", "status", "initial_status_code", "final_status_code", "final_url",
+        "redirect_count", "redirect_chain", "response_time_ms", "content_type", "error_type",
+        "error_message", "check_method", "attempts", "checked_at",
+    )
 
+    async def insert_job_url_items(self, rows: List[tuple]):
+        """rows: (job_id, row_no, batch_id, original_url, normalized_url, item_state, validation_source,
+        outcome, validated, status, error_type, error_message, checked_at). Caller commits."""
+        if rows:
+            await self.conn.executemany(
+                """INSERT INTO job_url_items (job_id, row_no, batch_id, original_url, normalized_url, item_state,
+                       validation_source, outcome, validated, status, error_type, error_message, checked_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+
+    async def mark_job_url_duplicates(self, job_id: str) -> int:
+        """Job-level dedup: every row whose normalized URL already appeared earlier in the job is a
+        DUPLICATE of the first occurrence (it keeps its own row; it never triggers its own request)."""
+        cur = await self.conn.execute(
+            """
+            UPDATE job_url_items
+               SET validation_source = 'DUPLICATE',
+                   duplicate_of_row = (SELECT MIN(c.row_no) FROM job_url_items c
+                                        WHERE c.job_id = job_url_items.job_id
+                                          AND c.normalized_url = job_url_items.normalized_url)
+             WHERE job_id = ?
+               AND normalized_url IS NOT NULL
+               AND row_no > (SELECT MIN(c.row_no) FROM job_url_items c
+                              WHERE c.job_id = job_url_items.job_id
+                                AND c.normalized_url = job_url_items.normalized_url)
+            """,
+            (job_id,),
+        )
+        return cur.rowcount
+
+    async def job_has_url_items(self, job_id: str) -> bool:
+        async with self.conn.execute("SELECT 1 FROM job_url_items WHERE job_id = ? LIMIT 1", (job_id,)) as cur:
+            return (await cur.fetchone()) is not None
+
+    async def get_pending_url_items_for_batch(self, job_id: str, batch_id: str) -> List[tuple]:
+        """Unique (non-duplicate) rows of this batch that still need a result: (row_no, original, normalized)."""
+        # execute_fetchall = ONE queued operation on the shared aiosqlite connection: another
+        # coroutine's UPDATE cannot run while this cursor is mid-scan (which skips/double-counts rows)
+        return list(await self.conn.execute_fetchall(
+            """SELECT row_no, original_url, normalized_url FROM job_url_items
+                WHERE job_id = ? AND batch_id = ? AND item_state = 'PENDING' AND validation_source != 'DUPLICATE'
+                ORDER BY row_no""",
+            (job_id, batch_id),
+        ))
+
+    async def get_reusable_results_bulk(self, urls: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fresh (within CACHE_TTL_HOURS) url_results rows that are SUCCESSFUL validations (an HTTP
+        status and no error). Failed attempts are never reused, so they are retried."""
+        out: Dict[str, Dict[str, Any]] = {}
+        if not settings.CACHE_ENABLED or not urls:
+            return out
+        from datetime import timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.CACHE_TTL_HOURS)
+        for i in range(0, len(urls), 500):
+            chunk = urls[i:i + 500]
+            ph = ",".join("?" for _ in chunk)
+            async with self.conn.execute(
+                f"SELECT * FROM url_results WHERE normalized_url IN ({ph}) "
+                f"AND final_status_code IS NOT NULL AND COALESCE(error_type, '') = ''",
+                chunk,
+            ) as cur:
+                cols = [d[0] for d in cur.description]
+                for row in await cur.fetchall():
+                    r = dict(zip(cols, row))
+                    try:
+                        ts = datetime.fromisoformat(str(r.get("checked_at") or "").replace("Z", "+00:00"))
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+                    if ts >= cutoff:
+                        out[r["normalized_url"]] = r
+        return out
+
+    async def record_url_item_results(self, job_id: str, items: List[Dict[str, Any]],
+                                      cache_rows: List[Dict[str, Any]]) -> int:
+        """
+        One transaction: write each unique row's result (PENDING -> DONE), copy it onto every
+        DUPLICATE row of the same normalized URL, and refresh the cross-job url_results cache with
+        fresh network results. Returns the number of ledger rows that became DONE.
+        """
+        if not items:
+            return 0
+        cols = self._URL_ITEM_RESULT_COLS
+        set_clause = ", ".join(f"{c} = :{c}" for c in cols)
+        params = []
+        for it in items:
+            p = {c: it.get(c) for c in cols}
+            p.update(job_id=job_id, row_no=it["row_no"], normalized_url=it.get("normalized_url"),
+                     validation_source=it["validation_source"])
+            params.append(p)
+        attempt = 0
+        while True:
+            try:
+                c1 = await self.conn.executemany(
+                    f"""UPDATE job_url_items SET {set_clause}, validation_source = :validation_source, item_state = 'DONE'
+                         WHERE job_id = :job_id AND row_no = :row_no AND item_state = 'PENDING'""",
+                    params,
+                )
+                done = c1.rowcount
+                c2 = await self.conn.executemany(
+                    f"""UPDATE job_url_items SET {set_clause}, item_state = 'DONE'
+                         WHERE job_id = :job_id AND normalized_url = :normalized_url
+                           AND validation_source = 'DUPLICATE' AND item_state = 'PENDING'""",
+                    [p for p in params if p["normalized_url"]],
+                )
+                done += c2.rowcount
+                if cache_rows:
+                    await self.batch_insert_results_no_commit(cache_rows)
+                await self.conn.commit()
+                return done
+            except aiosqlite.OperationalError as e:
+                await self.conn.rollback()
+                if ("locked" in str(e).lower() or "busy" in str(e).lower()) and attempt < 5:
+                    attempt += 1
+                    await asyncio.sleep(0.2 * attempt)
+                    continue
+                raise
+
+    async def batch_insert_results_no_commit(self, results: List[Dict[str, Any]]):
+        for r in results:
+            r.setdefault("original_url", r.get("normalized_url"))
+            r.setdefault("page_type", None)
+            r.setdefault("business", None)
+            r.setdefault("classification_method", None)
+        await self.conn.executemany(
+            """
+            INSERT INTO url_results (
+                normalized_url, original_url, initial_status_code, final_status_code, status,
+                final_url, redirect_count, redirect_chain, response_time_ms, content_type,
+                content_length, error_type, error_message, check_method, browser_verified,
+                page_type, business, classification_method, checked_at
+            ) VALUES (
+                :normalized_url, :original_url, :initial_status_code, :final_status_code, :status,
+                :final_url, :redirect_count, :redirect_chain, :response_time_ms, :content_type,
+                :content_length, :error_type, :error_message, :check_method, :browser_verified,
+                :page_type, :business, :classification_method, :checked_at
+            )
+            ON CONFLICT(normalized_url) DO UPDATE SET
+                original_url = excluded.original_url, initial_status_code = excluded.initial_status_code,
+                final_status_code = excluded.final_status_code, status = excluded.status,
+                final_url = excluded.final_url, redirect_count = excluded.redirect_count,
+                redirect_chain = excluded.redirect_chain, response_time_ms = excluded.response_time_ms,
+                content_type = excluded.content_type, content_length = excluded.content_length,
+                error_type = excluded.error_type, error_message = excluded.error_message,
+                check_method = excluded.check_method, browser_verified = excluded.browser_verified,
+                checked_at = excluded.checked_at
+            """,
+            results,
+        )
+
+    async def count_url_items_done_in_batch(self, job_id: str, batch_id: str) -> int:
+        rows = await self.conn.execute_fetchall(
+            "SELECT COUNT(*) FROM job_url_items WHERE job_id = ? AND batch_id = ? AND item_state = 'DONE'",
+            (job_id, batch_id),
+        )
+        return rows[0][0]
+
+    async def get_url_status_counts(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Per-row populations for a URL-status job (index-only aggregation)."""
+        rows = await self.conn.execute_fetchall(
+            """SELECT item_state, validation_source, outcome, validated, COUNT(*)
+                 FROM job_url_items WHERE job_id = ?
+                GROUP BY item_state, validation_source, outcome, validated""",
+            (job_id,),
+        )
+        if not rows:
+            return None
+        c = {
+            "total_urls": 0, "processed_urls": 0, "pending_urls": 0,
+            "successfully_validated_urls": 0, "failed_validations": 0,
+            "duplicate_urls": 0, "duplicate_urls_pending": 0, "invalid_urls": 0,
+            "unique_urls": 0, "new_http_checks": 0, "reused_from_cache": 0,
+            "by_outcome": {},
+        }
+        for state, src, outcome, validated, n in rows:
+            c["total_urls"] += n
+            if src == "DUPLICATE":
+                c["duplicate_urls"] += n
+                if state == "PENDING":
+                    c["duplicate_urls_pending"] += n
+            else:
+                c["unique_urls"] += n
+            if state == "PENDING":
+                c["pending_urls"] += n
+                continue
+            c["processed_urls"] += n
+            if validated:
+                c["successfully_validated_urls"] += n
+            else:
+                c["failed_validations"] += n
+            if outcome == "INVALID_URL":
+                c["invalid_urls"] += n
+            if src == "NEW_CHECK":
+                c["new_http_checks"] += n
+            elif src == "CACHED":
+                c["reused_from_cache"] += n
+            c["by_outcome"][outcome or "UNKNOWN"] = c["by_outcome"].get(outcome or "UNKNOWN", 0) + n
+        t = c["total_urls"]
+        c["progress_pct"] = round(c["processed_urls"] * 100.0 / t, 2) if t else 0.0
+        return c
+
+    async def iter_job_url_items(self, job_id: str, chunk_size: int = 5000):
+        """Stream ledger rows in submission order (bounded memory for 125K+ rows)."""
+        last = 0
+        while True:
+            cols = self._JUI_COLS or [r[1] for r in await self.conn.execute_fetchall("PRAGMA table_info(job_url_items)")]
+            self._JUI_COLS = cols
+            rows = list(await self.conn.execute_fetchall(
+                "SELECT * FROM job_url_items WHERE job_id = ? AND row_no > ? ORDER BY row_no LIMIT ?",
+                (job_id, last, chunk_size),
+            ))
+            if not rows:
+                return
+            for r in rows:
+                yield dict(zip(cols, r))
+            last = rows[-1][1]
+
+    async def get_job_url_items_page(self, job_id: str, offset: int = 0, limit: int = 500,
+                                     outcome: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM job_url_items WHERE job_id = ?"
+        args: list = [job_id]
+        if outcome:
+            sql += " AND outcome = ?"
+            args.append(outcome)
+        sql += " ORDER BY row_no LIMIT ? OFFSET ?"
+        args += [limit, offset]
+        async with self.conn.execute(sql, args) as cur:
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in await cur.fetchall()]

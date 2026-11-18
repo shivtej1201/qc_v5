@@ -1,0 +1,131 @@
+"""
+QC V5 on-page URL + image audit — command-line runner (existing engine + streaming CSV/ZIP package).
+
+    python run_on_page_audit.py --urls sitemap_urls.txt --db audit_cache.db --out-dir reports/onpage \
+        --job-id onpage_10k --primary-domain bajajfinserv.in --target-rps 8 --max-rps 10
+
+Re-running with the same --job-id RESUMES (completed pages skipped, validated results reused,
+interrupted in-flight work retried). Every limit is a flag; nothing here changes an API contract.
+"""
+import argparse
+import asyncio
+import json
+import os
+import sys
+import threading
+import time
+
+import psutil
+
+from config import settings
+from on_page_audit_engine import OnPageAuditEngine
+from on_page_csv_packager import build_on_page_csv_package
+from url_normalizer import URLNormalizer
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--urls", required=True, help="file with one source (sitemap) URL per line")
+    p.add_argument("--db", default=settings.DB_FILE)
+    p.add_argument("--job-id", required=True)
+    p.add_argument("--job-name", default="QC V5 On-Page URL + Image Audit")
+    p.add_argument("--out-dir", default="reports/onpage")
+    p.add_argument("--package-name", default="QC_V5_10K_AUDIT")
+    p.add_argument("--primary-domain", default="bajajfinserv.in",
+                   help="hosts equal to / ending in this domain share ONE Akamai request budget")
+    p.add_argument("--primary-hosts", default="", help="comma-separated extra hosts charged to the primary budget")
+    p.add_argument("--target-rps", type=float, default=8.0)
+    p.add_argument("--min-rps", type=float, default=3.0)
+    p.add_argument("--max-rps", type=float, default=10.0)
+    p.add_argument("--rps-increase-window", type=int, default=2000)
+    p.add_argument("--source-concurrency", type=int, default=10)
+    p.add_argument("--dest-concurrency", type=int, default=20)
+    p.add_argument("--image-concurrency", type=int, default=10)
+    p.add_argument("--per-host-concurrency", type=int, default=6, help="non-primary hosts (CDNs, external sites)")
+    p.add_argument("--max-connections", type=int, default=0, help="0 = 2x the largest worker pool")
+    p.add_argument("--no-images", action="store_true")
+    p.add_argument("--http2", action="store_true")
+    p.add_argument("--allow-local", action="store_true", help="testing only: allow private/loopback targets")
+    p.add_argument("--probe-url", default="")
+    p.add_argument("--akamai-cooldown-sec", type=float, default=120.0)
+    p.add_argument("--read-timeout", type=float, default=settings.READ_TIMEOUT)
+    p.add_argument("--max-retries", type=int, default=settings.MAX_RETRIES)
+    p.add_argument("--max-pages", type=int, default=0, help="stop after N pages (checkpoint test); 0 = all")
+    p.add_argument("--progress-json", default="")
+    p.add_argument("--no-package", action="store_true")
+    return p.parse_args(argv)
+
+
+def run(a) -> dict:
+    # Safety caps live in config; raise them only when the operator explicitly asks for more.
+    if a.source_concurrency > settings.PER_DOMAIN_CONCURRENCY:
+        print(f"[config] PER_DOMAIN_CONCURRENCY {settings.PER_DOMAIN_CONCURRENCY} -> {a.source_concurrency} (explicit)")
+        settings.PER_DOMAIN_CONCURRENCY = a.source_concurrency
+    if a.dest_concurrency > settings.LINK_AUDIT_CONCURRENCY:
+        print(f"[config] LINK_AUDIT_CONCURRENCY {settings.LINK_AUDIT_CONCURRENCY} -> {a.dest_concurrency} (explicit)")
+        settings.LINK_AUDIT_CONCURRENCY = a.dest_concurrency
+    if a.per_host_concurrency > settings.LINK_AUDIT_PER_HOST_CONCURRENCY:
+        settings.LINK_AUDIT_PER_HOST_CONCURRENCY = a.per_host_concurrency
+
+    with open(a.urls, encoding="utf-8") as f:
+        urls = [u.strip() for u in f if u.strip()]
+    entries = [{"original_url": u, "normalized_url": URLNormalizer.normalize(u), "source_sitemap": os.path.basename(a.urls),
+                "source_sitemap_number": 1} for u in urls]
+
+    eng = OnPageAuditEngine(
+        db_path=a.db, job_id=a.job_id, job_name=a.job_name, allow_local=a.allow_local,
+        primary_domain=a.primary_domain, primary_hosts=[h for h in a.primary_hosts.split(",") if h.strip()],
+        target_rps=a.target_rps, min_rps=a.min_rps, max_rps=a.max_rps, rps_increase_window=a.rps_increase_window,
+        source_concurrency=a.source_concurrency, dest_concurrency=a.dest_concurrency,
+        image_concurrency=a.image_concurrency, per_host_concurrency=a.per_host_concurrency,
+        max_connections=a.max_connections or None, audit_images=not a.no_images, http2=a.http2,
+        probe_url=a.probe_url or None, akamai_cooldown_sec=a.akamai_cooldown_sec,
+        read_timeout=a.read_timeout, max_retries=a.max_retries, progress_json_path=a.progress_json or None,
+    )
+    proc = psutil.Process()
+    peak = {"rss": 0.0, "cpu": []}
+    stop = threading.Event()
+
+    def sample():
+        proc.cpu_percent(None)
+        while not stop.is_set():
+            time.sleep(1.0)
+            peak["rss"] = max(peak["rss"], proc.memory_info().rss / 1048576)
+            peak["cpu"].append(proc.cpu_percent(None))
+
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    t0 = time.time()
+    try:
+        eng.initialize_inventory(entries)
+        stats = asyncio.run(eng.run(max_source_pages_this_run=a.max_pages or None))
+    finally:
+        eng.close()
+        stop.set()
+        th.join()
+    crawl_sec = time.time() - t0
+    perf = dict(stats.get("performance") or {})
+    perf["rss_peak_mb"] = round(max(peak["rss"], perf.get("rss_peak_mb") or 0), 1)
+    perf["cpu_avg_pct"] = round(sum(peak["cpu"]) / max(1, len(peak["cpu"])), 1)
+    perf["elapsed_sec"] = round(crawl_sec, 1)
+    el = max(1e-6, crawl_sec)
+    perf["total_requests_per_sec"] = round(perf.get("http_requests_total", 0) / el, 2)
+    perf["url_validations_per_sec"] = round(perf.get("dest_validations_http", 0) / el, 2)
+    perf["image_validations_per_sec"] = round(perf.get("image_validations_http", 0) / el, 2)
+    perf["source_pages_per_sec"] = round(perf.get("source_fetches", 0) / el, 2)
+    perf["primary_requests_per_sec"] = perf.get("achieved_primary_rps")
+    perf["cooldowns"] = perf.get("akamai_cooldowns")
+    result = {"status": stats.get("status"), "crawl_seconds": round(crawl_sec, 1), "stats": stats, "performance": perf}
+    if not a.no_package and not a.max_pages:
+        t1 = time.time()
+        pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf)
+        result["package"] = {k: v for k, v in pkg.items() if k != "summary"}
+        result["package_seconds"] = round(time.time() - t1, 1)
+        result["final_qc_status"] = pkg["final_qc_status"]
+    return result
+
+
+if __name__ == "__main__":
+    res = run(parse_args())
+    print(json.dumps({k: v for k, v in res.items() if k != "stats"}, indent=2, default=str))
+    sys.exit(0 if res.get("final_qc_status", "PASS") == "PASS" else 1)

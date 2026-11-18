@@ -20,6 +20,7 @@ class UrlResult(BaseModel):
     check_method: str = ""
     browser_verified: str = "NO"
     checked_at: Optional[str] = None
+    attempts: int = 0
     html: Optional[str] = None
 
     def to_db_dict(self):

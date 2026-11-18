@@ -583,7 +583,8 @@ def build_on_page_audit_package(
 
     new_http_checks = val_source_counts["NEW_CHECK"]
     reused_http_checks = val_source_counts["REUSED"]
-    non_http_rels = val_source_counts["NON_HTTP_SKIPPED"] + val_source_counts["FRAGMENT_SKIPPED"]
+    non_http_rels = (val_source_counts["NON_HTTP_SKIPPED"] + val_source_counts["FRAGMENT_SKIPPED"]
+                     + val_source_counts["INVALID_SKIPPED"])
     http_rels_total = new_http_checks + reused_http_checks
     reuse_rate_pct = round((reused_http_checks / http_rels_total) * 100.0, 2) if http_rels_total else 0.0
     uniq_all_dests = len(ref_counts)

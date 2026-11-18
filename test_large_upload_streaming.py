@@ -51,8 +51,13 @@ async def test_large_csv_upload_and_streaming_report():
                 workbook = openpyxl.load_workbook(output, read_only=True, data_only=True)
                 rows = list(workbook["URL Status"].iter_rows(values_only=True))
                 workbook.close()
-                assert len(rows) == 2
-                assert rows[1][0] == "https://example.com/0"
+                # One record per SUBMITTED URL (nothing silently dropped), in submission order;
+                # the job has not run yet, so every row is still PENDING.
+                header = rows[0]
+                assert len(rows) == record_count + 1
+                assert rows[1][header.index("original_url")] == "https://example.com/0"
+                assert rows[-1][header.index("original_url")] == f"https://example.com/{record_count - 1}"
+                assert {r[header.index("item_state")] for r in rows[1:]} == {"PENDING"}
             finally:
                 await db.close()
         finally:
