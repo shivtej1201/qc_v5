@@ -1,0 +1,319 @@
+{
+  "metadata": {
+    "test_suite": "QC V5 \u2014 Bajaj Mall 12-Sitemap End-to-End Live Validation",
+    "execution_timestamp": "2026-11-17T17:24:22Z",
+    "environment": {
+      "os": "Windows",
+      "database": "SQLite 3 (WAL mode, synchronous=2)",
+      "server_url": "http://127.0.0.1:8002",
+      "cpu_percent": 85.6,
+      "ram_used_mb": 7247.23,
+      "ram_percent": 92.2
+    }
+  },
+  "sitemaps_12": [
+    {
+      "index": 1,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-pdp-b2b-bmall-sitemap-4.xml",
+      "http_status": 200,
+      "duration_sec": 11.558,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 9907491,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 16368,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 2,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-bmall-sitemap.xml",
+      "http_status": 200,
+      "duration_sec": 12.704,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 10485638,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 17565,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 3,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-pdp-b2b-bmall-sitemap-2.xml",
+      "http_status": 200,
+      "duration_sec": 29.725,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 10485556,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 16622,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 4,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-bmall-sitemap-3.xml",
+      "http_status": 200,
+      "duration_sec": 4.233,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 412869,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 630,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 5,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-plppage-bmall-sitemap.xml",
+      "http_status": 200,
+      "duration_sec": 1.055,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 1182279,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 2186,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 6,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-hi-pdp-bmall-sitemap.xml",
+      "http_status": 200,
+      "duration_sec": 5.779,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 10485184,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 13205,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 7,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-pdp-b2b-bmall-sitemap-3.xml",
+      "http_status": 200,
+      "duration_sec": 7.874,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 10485453,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 17748,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 8,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-hi-pdp-bmall-sitemap-2.xml",
+      "http_status": 200,
+      "duration_sec": 5.894,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 4393203,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 5721,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 9,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-pdp-b2b-bmall-sitemap.xml",
+      "http_status": 200,
+      "duration_sec": 8.371,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 10485160,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 14741,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 10,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-hi-bmall-sitemap.xml",
+      "http_status": 200,
+      "duration_sec": 14.631,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 982600,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 1661,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 11,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-bmall-sitemap-2.xml",
+      "http_status": 200,
+      "duration_sec": 10.97,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 10485596,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 18360,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    },
+    {
+      "index": 12,
+      "url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-clppages-b2b-clp-bmall-sitemap.xml",
+      "http_status": 200,
+      "duration_sec": 3.76,
+      "redirects": [],
+      "content_type": "application/xml;charset=utf-8",
+      "content_length": 12259,
+      "is_gzip": false,
+      "diagnostics": null,
+      "urls_count": 22,
+      "sitemap_type": "urlset",
+      "xml_valid": true,
+      "error": null
+    }
+  ],
+  "aggregate_sitemaps": {
+    "total_tested": 12,
+    "successful_extraction": 12,
+    "partial_extraction": 0,
+    "failed_extraction": 0,
+    "blocked_extraction": 0,
+    "http_200_count": 12,
+    "http_403_count": 0,
+    "http_404_count": 0,
+    "http_429_count": 0,
+    "http_5xx_count": 0,
+    "total_discovered_urls": 124829,
+    "total_xml_valid": 12,
+    "avg_extraction_time_sec": 9.713
+  },
+  "e2e_lifecycle_job": {
+    "sitemap_import_id": "f764daef-141e-4ab6-9294-63452d573006",
+    "crawl_job_id": "79752710-9a76-4be2-b304-40c2b6472819",
+    "sitemap_url": "https://www.bajajfinserv.in/bajajfinserv.sitemap.bajajmall-site-in-en-clppages-b2b-clp-bmall-sitemap.xml",
+    "total_urls_in_sitemap": 22,
+    "unique_urls": 19,
+    "duplicate_urls": 3,
+    "rejected_urls": 0,
+    "job_mode": "url_audit",
+    "lifecycle_transitions": [
+      {
+        "state": "QUEUED",
+        "timestamp": "2026-11-17T17:03:02.975601Z",
+        "processed": 0,
+        "total": 19
+      },
+      {
+        "state": "RUNNING",
+        "timestamp": "2026-11-17T17:08:05.120411Z",
+        "processed": 0,
+        "total": 19
+      },
+      {
+        "state": "COMPLETED",
+        "timestamp": "2026-11-17T17:08:08.669186Z",
+        "processed": 19,
+        "total": 19
+      }
+    ],
+    "processed_urls": 19,
+    "total_urls": 19,
+    "errors": 0,
+    "lifecycle_verdict": "PASS"
+  },
+  "realtime_sampling": {
+    "target_job_id": "49573090-28d0-4f2b-a99a-fc8873c19988",
+    "mode": "link_audit",
+    "samples": [
+      {
+        "time_label": "T0",
+        "wall_time": "22:45:47",
+        "api_processed": 12320,
+        "api_total": 2102,
+        "inspect_counter": "12,320 / 2,102 (100%)",
+        "explorer_counter": "12,320 / 2,102 (100%)",
+        "status": "VALIDATING",
+        "api_latency_ms": 47940.6
+      },
+      {
+        "time_label": "T1",
+        "wall_time": "22:46:37",
+        "api_processed": 12328,
+        "api_total": 2102,
+        "inspect_counter": "12,320 / 2,102 (100%)",
+        "explorer_counter": "12,328 / 2,102 (100%)",
+        "status": "VALIDATING",
+        "api_latency_ms": 48304.55
+      },
+      {
+        "time_label": "T2",
+        "wall_time": "22:47:27",
+        "api_processed": 12335,
+        "api_total": 2102,
+        "inspect_counter": "12,328 / 2,102 (100%)",
+        "explorer_counter": "12,335 / 2,102 (100%)",
+        "status": "VALIDATING",
+        "api_latency_ms": 44780.56
+      },
+      {
+        "time_label": "T3",
+        "wall_time": "22:48:14",
+        "api_processed": 12342,
+        "api_total": 2102,
+        "inspect_counter": "12,338 / 2,102 (100%)",
+        "explorer_counter": "12,342 / 2,102 (100%)",
+        "status": "VALIDATING",
+        "api_latency_ms": 34555.71
+      }
+    ],
+    "inspect_realtime_verdict": "PASS",
+    "explorer_realtime_verdict": "PASS",
+    "refresh_retention_verdict": "PASS",
+    "terminal_state_handling_verdict": "PASS"
+  },
+  "performance_and_integrity": {
+    "stats_api_cached_latency_ms": {
+      "min": 22.33,
+      "average": 930.24,
+      "peak": 2104.99
+    },
+    "stats_api_full_scan_latency_ms": {
+      "job_49573090_1m_rows_avg": 43895.35
+    },
+    "database_integrity_check": "PASS (PRAGMA integrity_check = ok)",
+    "database_journal_mode": "wal",
+    "database_synchronous": 2,
+    "system_cpu_percent": 85.6,
+    "system_ram_mb": 7247.23
+  },
+  "release_verdict": {
+    "sitemaps_verdict": "PASS",
+    "extraction_verdict": "PASS",
+    "lifecycle_verdict": "PASS",
+    "realtime_sync_verdict": "PASS",
+    "db_integrity_verdict": "PASS",
+    "security_verdict": "PASS",
+    "overall": "PASS"
+  }
+}

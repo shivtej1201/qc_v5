@@ -346,6 +346,135 @@ class Database:
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_diagnostics_job ON request_diagnostics(job_id)")
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_diagnostics_class ON request_diagnostics(classification)")
 
+        # Phase 12: Complete On-Page URL Extraction + Status Audit Tables (Additive Migration)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS on_page_audit_jobs (
+                job_id TEXT PRIMARY KEY,
+                name TEXT,
+                status TEXT DEFAULT 'QUEUED',
+                source_pages_total INTEGER DEFAULT 0,
+                source_pages_pending INTEGER DEFAULT 0,
+                source_pages_completed INTEGER DEFAULT 0,
+                source_pages_failed INTEGER DEFAULT 0,
+                source_pages_blocked INTEGER DEFAULT 0,
+                source_pages_timed_out INTEGER DEFAULT 0,
+                source_pages_explicitly_excluded INTEGER DEFAULT 0,
+                url_occurrences_extracted INTEGER DEFAULT 0,
+                url_relationships_discovered INTEGER DEFAULT 0,
+                url_relationships_persisted INTEGER DEFAULT 0,
+                explicitly_excluded_relationships INTEGER DEFAULT 0,
+                unique_destination_urls INTEGER DEFAULT 0,
+                unique_http_destinations INTEGER DEFAULT 0,
+                unique_http_destinations_validated INTEGER DEFAULT 0,
+                unique_http_destinations_failed INTEGER DEFAULT 0,
+                unique_http_destinations_blocked INTEGER DEFAULT 0,
+                unique_http_destinations_timed_out INTEGER DEFAULT 0,
+                unique_http_destinations_excluded INTEGER DEFAULT 0,
+                new_http_validations INTEGER DEFAULT 0,
+                reused_http_validations INTEGER DEFAULT 0,
+                cache_freshness_hours REAL DEFAULT 24.0,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP
+            )
+        """)
+
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS on_page_source_pages (
+                job_id TEXT NOT NULL,
+                source_page_url TEXT NOT NULL,
+                source_page_id TEXT NOT NULL,
+                source_sitemap TEXT DEFAULT '',
+                source_sitemap_number INTEGER DEFAULT 0,
+                normalized_source_url TEXT NOT NULL,
+                crawl_state TEXT DEFAULT 'PENDING',
+                initial_http_status INTEGER,
+                http_status INTEGER,
+                final_url TEXT,
+                redirect_count INTEGER DEFAULT 0,
+                redirect_chain TEXT DEFAULT '[]',
+                content_type TEXT DEFAULT '',
+                response_time_ms REAL DEFAULT 0.0,
+                error_type TEXT DEFAULT '',
+                error_message TEXT DEFAULT '',
+                robots_status TEXT DEFAULT 'PENDING',
+                waf_status TEXT DEFAULT 'NONE',
+                business TEXT DEFAULT 'NEEDS_REVIEW',
+                language TEXT DEFAULT 'UNKNOWN',
+                page_type TEXT DEFAULT 'NEEDS_REVIEW',
+                classification_method TEXT DEFAULT '',
+                raw_occurrences_count INTEGER DEFAULT 0,
+                relationships_count INTEGER DEFAULT 0,
+                remark TEXT DEFAULT '',
+                checked_at TIMESTAMP,
+                PRIMARY KEY (job_id, source_page_url)
+            )
+        """)
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_opsp_state ON on_page_source_pages(job_id, crawl_state)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_opsp_id ON on_page_source_pages(job_id, source_page_id)")
+
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS on_page_validation_cache (
+                job_id TEXT NOT NULL,
+                normalized_url TEXT NOT NULL,
+                url_scope TEXT NOT NULL,
+                validation_state TEXT DEFAULT 'PENDING',
+                initial_http_status INTEGER,
+                http_status INTEGER,
+                final_url TEXT,
+                redirect_count INTEGER DEFAULT 0,
+                redirect_chain TEXT DEFAULT '[]',
+                response_time_ms REAL DEFAULT 0.0,
+                content_type TEXT DEFAULT '',
+                status_bucket TEXT DEFAULT 'PENDING',
+                status_classification TEXT DEFAULT 'Pending',
+                remark TEXT DEFAULT 'Pending Validation',
+                error_type TEXT DEFAULT '',
+                error_message TEXT DEFAULT '',
+                robots_status TEXT DEFAULT 'ALLOWED',
+                waf_status TEXT DEFAULT 'NONE',
+                first_seen_source_url TEXT DEFAULT '',
+                reuse_count INTEGER DEFAULT 0,
+                referenced INTEGER DEFAULT 1,
+                checked_at TIMESTAMP,
+                PRIMARY KEY (job_id, normalized_url)
+            )
+        """)
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_opvc_state ON on_page_validation_cache(job_id, referenced, validation_state)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_opvc_bucket ON on_page_validation_cache(job_id, status_bucket)")
+
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS on_page_link_relationships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                source_page_url TEXT NOT NULL,
+                source_page_status INTEGER,
+                source_page_final_url TEXT,
+                found_url TEXT NOT NULL,
+                normalized_found_url TEXT NOT NULL,
+                found_url_type TEXT NOT NULL,
+                url_syntax_type TEXT NOT NULL,
+                found_url_scope TEXT NOT NULL,
+                anchor_text TEXT DEFAULT '',
+                anchor_texts TEXT DEFAULT '[]',
+                link_types TEXT DEFAULT '[]',
+                rel TEXT DEFAULT '',
+                hreflang TEXT DEFAULT '',
+                occurrence_count INTEGER DEFAULT 1,
+                representative_location TEXT DEFAULT '',
+                business TEXT DEFAULT 'NEEDS_REVIEW',
+                language TEXT DEFAULT 'UNKNOWN',
+                page_type TEXT DEFAULT 'NEEDS_REVIEW',
+                validation_source TEXT NOT NULL,
+                remark TEXT DEFAULT '',
+                extracted_at TIMESTAMP,
+                UNIQUE (job_id, source_page_url, normalized_found_url)
+            )
+        """)
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_oplr_job ON on_page_link_relationships(job_id)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_oplr_dest ON on_page_link_relationships(job_id, normalized_found_url)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_oplr_scope ON on_page_link_relationships(job_id, found_url_scope)")
+        await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_oplr_valsrc ON on_page_link_relationships(job_id, validation_source)")
+
         # Migrations for existing tables
         try:
             await self.conn.execute("ALTER TABLE request_diagnostics ADD COLUMN evidence_type TEXT DEFAULT 'VERIFIED_EVIDENCE'")
@@ -1820,4 +1949,46 @@ class Database:
                     except Exception: pass
                 items.append(item)
             return items
+
+    async def get_on_page_audit_stats(self, job_id: str) -> Optional[Dict[str, Any]]:
+        async with self.conn.execute("SELECT * FROM on_page_audit_jobs WHERE job_id = ?", (job_id,)) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            cols = [desc[0] for desc in cur.description]
+            data = dict(zip(cols, row))
+
+        src_total = int(data.get("source_pages_total") or 0)
+        src_processed = (
+            int(data.get("source_pages_completed") or 0)
+            + int(data.get("source_pages_failed") or 0)
+            + int(data.get("source_pages_blocked") or 0)
+            + int(data.get("source_pages_timed_out") or 0)
+            + int(data.get("source_pages_explicitly_excluded") or 0)
+        )
+        data["source_pages_processed"] = src_processed
+        data["source_pages_progress_pct"] = round((src_processed / src_total) * 100.0, 2) if src_total else 0.0
+
+        dest_total = int(data.get("unique_http_destinations") or 0)
+        dest_done = (
+            int(data.get("unique_http_destinations_validated") or 0)
+            + int(data.get("unique_http_destinations_failed") or 0)
+            + int(data.get("unique_http_destinations_blocked") or 0)
+            + int(data.get("unique_http_destinations_timed_out") or 0)
+            + int(data.get("unique_http_destinations_excluded") or 0)
+        )
+        data["unique_http_destinations_processed"] = dest_done
+        data["destinations_progress_pct"] = round((dest_done / dest_total) * 100.0, 2) if dest_total else 0.0
+
+        http_rels = int(data.get("new_http_validations") or 0) + int(data.get("reused_http_validations") or 0)
+        data["reuse_rate_pct"] = (
+            round((int(data.get("reused_http_validations") or 0) / http_rels) * 100.0, 2) if http_rels else 0.0
+        )
+        return data
+
+    async def list_on_page_audits(self) -> List[Dict[str, Any]]:
+        async with self.conn.execute("SELECT * FROM on_page_audit_jobs ORDER BY created_at DESC") as cur:
+            cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, r)) for r in await cur.fetchall()]
+
 

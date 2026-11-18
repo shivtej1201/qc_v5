@@ -19,9 +19,13 @@ class Parser(HTMLParser):
         
         self.links = []
         self.images = []
+        self.all_on_page_urls = []
+        self.canonicals = []
+        self.hreflangs = []
         
         self.current_tag = None
         self.current_anchor = None
+        self.current_on_page_anchor = None
         
         self.path = []
         self.ignored_elements = ('header', 'footer', 'nav')
@@ -53,9 +57,41 @@ class Parser(HTMLParser):
                 self.meta_desc = attr_dict.get('content', '')
                 
         elif tag == 'link':
-            rel = attr_dict.get('rel', '')
-            if rel == 'canonical':
-                self.canonical = attr_dict.get('href', '')
+            rel = attr_dict.get('rel', '').strip()
+            rel_tokens = set(rel.split()) if rel else set()
+            link_href = attr_dict.get('href', '').strip()
+            hreflang = attr_dict.get('hreflang', '').strip()
+            if 'canonical' in rel_tokens:
+                self.canonical = link_href
+                if link_href:
+                    self.canonicals.append(link_href)
+                    self.all_on_page_urls.append({
+                        'href': link_href,
+                        'text': '',
+                        'url_type': 'CANONICAL',
+                        'rel': rel,
+                        'hreflang': hreflang,
+                        'component': 'Head' if self.in_head else self._identify_component(),
+                    })
+            elif 'alternate' in rel_tokens and hreflang and link_href:
+                self.hreflangs.append({'href': link_href, 'hreflang': hreflang})
+                self.all_on_page_urls.append({
+                    'href': link_href,
+                    'text': '',
+                    'url_type': 'HREFLANG',
+                    'rel': rel,
+                    'hreflang': hreflang,
+                    'component': 'Head' if self.in_head else self._identify_component(),
+                })
+            elif link_href and rel_tokens.intersection({'prev', 'next', 'amphtml', 'alternate'}):
+                self.all_on_page_urls.append({
+                    'href': link_href,
+                    'text': '',
+                    'url_type': 'LINK_META',
+                    'rel': rel,
+                    'hreflang': hreflang,
+                    'component': 'Head' if self.in_head else self._identify_component(),
+                })
                 
         dpt = attr_dict.get('data-pagetype')
         if dpt and str(dpt).strip():
@@ -68,14 +104,48 @@ class Parser(HTMLParser):
                     
         if tag == 'a':
             href = attr_dict.get('href')
-            if href:
+            if href is not None and str(href).strip():
                 comp = self._identify_component()
+                rel = attr_dict.get('rel', '').strip()
+                hreflang = attr_dict.get('hreflang', '').strip()
                 self.current_anchor = {
                     'href': href,
                     'text': '',
                     'component': comp,
-                    'container_type': self._identify_container_type(comp)
+                    'container_type': self._identify_container_type(comp),
+                    'rel': rel,
+                    'hreflang': hreflang,
                 }
+                self.current_on_page_anchor = {
+                    'href': str(href).strip(),
+                    'text': '',
+                    'url_type': 'ANCHOR',
+                    'rel': rel,
+                    'hreflang': hreflang,
+                    'component': comp,
+                }
+        elif tag == 'area':
+            href = attr_dict.get('href', '').strip()
+            if href:
+                self.all_on_page_urls.append({
+                    'href': href,
+                    'text': attr_dict.get('alt', '').strip(),
+                    'url_type': 'AREA',
+                    'rel': attr_dict.get('rel', '').strip(),
+                    'hreflang': '',
+                    'component': self._identify_component(),
+                })
+        elif tag == 'iframe':
+            src = attr_dict.get('src', '').strip()
+            if src:
+                self.all_on_page_urls.append({
+                    'href': src,
+                    'text': attr_dict.get('title', '').strip(),
+                    'url_type': 'IFRAME',
+                    'rel': '',
+                    'hreflang': '',
+                    'component': self._identify_component(),
+                })
                 
         elif tag == 'img':
             src = attr_dict.get('src') or attr_dict.get('data-src') or attr_dict.get('data-lazy-src') or attr_dict.get('data-original')
@@ -107,9 +177,13 @@ class Parser(HTMLParser):
         elif tag == 'title':
             self.current_tag = None
             
-        if tag == 'a' and self.current_anchor:
-            self.links.append(self.current_anchor)
-            self.current_anchor = None
+        if tag == 'a':
+            if self.current_anchor:
+                self.links.append(self.current_anchor)
+                self.current_anchor = None
+            if self.current_on_page_anchor:
+                self.all_on_page_urls.append(self.current_on_page_anchor)
+                self.current_on_page_anchor = None
             
         if self.path:
             self.path.pop()
@@ -119,6 +193,8 @@ class Parser(HTMLParser):
             self.title += data
         if self.current_anchor:
             self.current_anchor['text'] += data
+        if self.current_on_page_anchor:
+            self.current_on_page_anchor['text'] += data
             
     def _identify_component(self):
         for tag, attrs in reversed(self.path):
@@ -168,4 +244,16 @@ class Parser(HTMLParser):
         
         body = [img for img in self.images if img['container_type'] == 'body']
         return body
+
+    def get_all_on_page_urls(self) -> List[Dict[str, Any]]:
+        """
+        Return all discovered URL-bearing elements (anchor, canonical, hreflang,
+        link meta, area, iframe) across the entire document, preserving rel,
+        hreflang, anchor text, and component location.
+        """
+        if self.current_on_page_anchor is not None:
+            self.all_on_page_urls.append(self.current_on_page_anchor)
+            self.current_on_page_anchor = None
+        return list(self.all_on_page_urls)
+
 

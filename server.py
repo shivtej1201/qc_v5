@@ -308,8 +308,24 @@ async def get_job_stats(job_id: str):
         stats['created_at'] = created_at
         stats['updated_at'] = updated_at
         stats['status'] = status
+        # Guarantee processed_records never exceeds total_records
+        if total_records is not None and total_records > 0 and processed_records is not None and processed_records > total_records:
+            total_records = processed_records
         stats['processed_records'] = processed_records
         stats['total_records'] = total_records
+        return stats
+
+    if mode == "on_page_audit":
+        stats = await db.get_on_page_audit_stats(job_id) or {}
+        stats['job_id'] = job_id
+        stats['mode'] = mode
+        stats['created_at'] = created_at
+        stats['updated_at'] = updated_at
+        stats['status'] = status
+        src_total = stats.get('source_pages_total', total_records or 0)
+        src_proc = stats.get('source_pages_processed', processed_records or 0)
+        stats['processed_records'] = src_proc
+        stats['total_records'] = src_total
         return stats
 
     if mode == "link_audit":
@@ -323,6 +339,9 @@ async def get_job_stats(job_id: str):
         stats['created_at'] = created_at
         stats['updated_at'] = updated_at
         stats['status'] = status
+        # Guarantee processed_records never exceeds total_records
+        if total_records is not None and total_records > 0 and processed_records is not None and processed_records > total_records:
+            total_records = processed_records
         stats['processed_records'] = processed_records
         stats['total_records'] = total_records
         return stats
@@ -364,6 +383,18 @@ async def get_job_stats(job_id: str):
 async def get_job_non_200_results(job_id: str):
     results = await db.get_job_non_200_destinations(job_id)
     return {"non_200_results": results}
+
+@app.get("/api/on-page-audits")
+async def list_on_page_audits():
+    audits = await db.list_on_page_audits()
+    return {"audits": audits}
+
+@app.get("/api/on-page-audits/{job_id}/stats")
+async def get_on_page_audit_stats_endpoint(job_id: str):
+    stats = await db.get_on_page_audit_stats(job_id)
+    if not stats:
+        raise HTTPException(404, "On-page audit job not found")
+    return stats
 
 @app.get("/api/debug")
 async def get_debug():

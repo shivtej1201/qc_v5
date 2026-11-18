@@ -1908,12 +1908,15 @@
 
                 // Source extraction progress: processed_records / total_records
                 const jobMeta = currentJobs.find(j => j.id === jobId);
-                const sourceProc = (stats.processed_records !== undefined && stats.processed_records !== null)
+                let sourceProc = (stats.processed_records !== undefined && stats.processed_records !== null)
                     ? Number(stats.processed_records)
                     : (jobMeta && jobMeta.processed_records !== undefined ? Number(jobMeta.processed_records) : 0);
-                const sourceTotal = (stats.total_records !== undefined && stats.total_records !== null)
+                let sourceTotal = (stats.total_records !== undefined && stats.total_records !== null)
                     ? Number(stats.total_records)
                     : (jobMeta && jobMeta.total_records !== undefined ? Number(jobMeta.total_records) : 0);
+                if (sourceTotal > 0 && sourceProc > sourceTotal) {
+                    sourceTotal = sourceProc;
+                }
                 const sourcePct = sourceTotal > 0 ? Math.min(100, Math.round((sourceProc / sourceTotal) * 100)) : 0;
 
                 document.getElementById('explorer-source-progress-text').textContent = `${sourceProc.toLocaleString()} / ${sourceTotal.toLocaleString()} (${sourcePct}%)`;
@@ -2062,8 +2065,11 @@
                 if (!statsRes.ok) return;
                 const stats = await statsRes.json();
 
-                const tot = Number(stats.total_records || 0);
+                let tot = Number(stats.total_records || 0);
                 const proc = Number(stats.processed_records || 0);
+                if (tot > 0 && proc > tot) {
+                    tot = proc;
+                }
                 const pct = tot > 0 ? Math.min(100, Math.round((proc / tot) * 100)) : 0;
 
                 const progText = document.getElementById('modal-details-progress-text');

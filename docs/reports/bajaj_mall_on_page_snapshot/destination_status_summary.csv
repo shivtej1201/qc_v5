@@ -1,0 +1,12 @@
+﻿Status Bucket,Unique HTTP Destinations,Share %
+2xx,92558,92.3659
+3xx,0,0.0
+4xx,0,0.0
+5xx,0,0.0
+Timeout,118,0.1178
+DNS/Network,5,0.005
+SSL,0,0.0
+Robots blocked,0,0.0
+WAF blocked,0,0.0
+Other errors,0,0.0
+PENDING,7527,7.5114

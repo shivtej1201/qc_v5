@@ -1,0 +1,83 @@
+{
+  "snapshot_timestamp_utc": "2026-11-18T03:08:43.128735Z",
+  "job_id": "onpage_9c0c3263702e",
+  "audit_phase": "IN_PROGRESS_STAGE_A_SNAPSHOT",
+  "source_pages": {
+    "total": 124474,
+    "processed": 93200,
+    "completion_pct": 74.88,
+    "completed": 92897,
+    "failed": 22,
+    "blocked": 0,
+    "timed_out": 281,
+    "pending": 31274
+  },
+  "relationships": {
+    "raw_occurrences_extracted": 3563988,
+    "persisted_relationships": 3527721,
+    "streamed_relationships_verified": 3527721,
+    "by_scope": {
+      "EXTERNAL": 92907,
+      "INTERNAL": 3434814
+    },
+    "by_type": {
+      "ANCHOR": 3341928,
+      "CANONICAL": 92896,
+      "IFRAME": 92897
+    },
+    "by_syntax": {
+      "ABSOLUTE": 3519260,
+      "ROOT_RELATIVE": 8461
+    },
+    "by_validation_source": {
+      "NEW_CHECK": 100208,
+      "REUSED": 3427513
+    },
+    "broken_or_timeout_relationships": 392,
+    "redirect_relationships": 0
+  },
+  "unique_http_destinations": {
+    "total": 100208,
+    "validated_so_far": 92681,
+    "pending_stage_b": 7527,
+    "by_state": {
+      "PENDING": 7527,
+      "VALIDATED": 92558,
+      "TIMED_OUT": 118,
+      "FAILED": 5
+    },
+    "by_bucket": {
+      "2xx": 92558,
+      "3xx": 0,
+      "4xx": 0,
+      "5xx": 0,
+      "Timeout": 118,
+      "DNS/Network": 5,
+      "SSL": 0,
+      "Robots blocked": 0,
+      "WAF blocked": 0,
+      "Other errors": 0,
+      "PENDING": 7527
+    },
+    "by_scope": {
+      "INTERNAL": 100197,
+      "EXTERNAL": 11
+    },
+    "unique_issues_count": 123,
+    "unique_externals_count": 11
+  },
+  "validation_cache_evidence": {
+    "unique_http_destinations": 100208,
+    "new_http_validations": 100208,
+    "reused_validations": 3427513,
+    "reuse_rate_pct": 97.16,
+    "invariant_new_plus_reused_eq_http_rels": true,
+    "invariant_new_eq_unique_http": true
+  },
+  "snapshot_invariants": {
+    "source_total_eq_processed_plus_pending": true,
+    "streamed_rels_eq_db_rels": true,
+    "new_checks_eq_unique_http": true,
+    "db_wal_snapshot_clean": true
+  }
+}

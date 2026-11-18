@@ -435,16 +435,8 @@ class LinkValidator:
                 else:
                     st["failed_validations"] += 1
 
-        # Update jobs.total_records to total_unique if it's currently something else, and set processed_records
-        if total_unique > 0:
-            try:
-                await self.db.conn.execute(
-                    "UPDATE jobs SET total_records = ?, processed_records = ?, updated_at = ? WHERE id = ?",
-                    (total_unique, st["completed_unique"], datetime.now(timezone.utc).isoformat(), job_id)
-                )
-                await self.db.conn.commit()
-            except Exception:
-                pass
+        # Destination tracking: do NOT overwrite jobs.total_records or jobs.processed_records (which track source batch crawl)
+        # Unique destination totals are tracked in live stats and destination tables
 
         # 4. Bounded Queue & Parallel Workers
         queue = asyncio.Queue(maxsize=self.queue_maxsize)
@@ -479,10 +471,10 @@ class LinkValidator:
                     try:
                         await self.db.batch_upsert_job_destinations(to_flush)
                         await self.db.batch_insert_results(to_flush)
-                        # Incrementally update jobs.processed_records in database
+                        # Incrementally update jobs timestamp in database
                         await self.db.conn.execute(
-                            "UPDATE jobs SET processed_records = ?, updated_at = ? WHERE id = ?",
-                            (st["completed_unique"], datetime.now(timezone.utc).isoformat(), job_id)
+                            "UPDATE jobs SET updated_at = ? WHERE id = ?",
+                            (datetime.now(timezone.utc).isoformat(), job_id)
                         )
                         await self.db.conn.commit()
                     except Exception as e:
@@ -555,11 +547,11 @@ class LinkValidator:
         # Final flush
         await flush_results_buffer(force=True)
 
-        # Update final processed_records in jobs table
+        # Update final timestamp in jobs table
         now_iso = datetime.now(timezone.utc).isoformat()
         await self.db.conn.execute(
-            "UPDATE jobs SET processed_records = ?, updated_at = ? WHERE id = ?",
-            (st["completed_unique"], now_iso, job_id)
+            "UPDATE jobs SET updated_at = ? WHERE id = ?",
+            (now_iso, job_id)
         )
         await self.db.conn.commit()
 
