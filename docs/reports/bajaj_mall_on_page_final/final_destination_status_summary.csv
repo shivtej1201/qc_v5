@@ -1,0 +1,9 @@
+﻿Status Bucket,Unique HTTP Destinations
+2xx,120070
+5xx,2466
+3xx,2386
+Timeout,705
+DNS/Network,145
+Robots blocked,4
+Other errors,3
+4xx,1

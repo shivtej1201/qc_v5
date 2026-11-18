@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-11-18T10:17:11.303675Z",
+  "job_id": "onpage_9c0c3263702e",
+  "db_integrity": "ok",
+  "ram_used_mb": 6873.0,
+  "package_build_seconds": 3085.29,
+  "excel_relationship_sheets": [
+    "All URL Relationships",
+    "All URL Relationships (2)",
+    "All URL Relationships (3)",
+    "All URL Relationships (4)",
+    "All URL Relationships (5)"
+  ],
+  "regression_summary": {}
+}

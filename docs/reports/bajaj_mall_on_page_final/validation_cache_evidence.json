@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-11-18T10:17:11.299345Z",
+  "job_id": "onpage_9c0c3263702e",
+  "unique_destination_count": 125782,
+  "unique_http_destination_count": 125780,
+  "new_http_validation_count": 125780,
+  "reused_validation_count": 4207427,
+  "http_relationship_count": 4333207,
+  "non_http_and_fragment_relationships": 16,
+  "total_relationship_count": 4333223,
+  "reuse_rate_pct": 97.1,
+  "invariant_http_rels_eq_new_plus_reused": true,
+  "invariant_new_eq_unique_http": true
+}

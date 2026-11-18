@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-11-18T10:17:11.300422Z",
+  "job_id": "onpage_9c0c3263702e",
+  "source_pages": {
+    "total": 124474,
+    "completed": 119862,
+    "failed": 2490,
+    "blocked": 0,
+    "timed_out": 2122,
+    "explicitly_excluded": 0,
+    "pending": 0
+  },
+  "unique_http_destinations": {
+    "total": 125780,
+    "validated": 124923,
+    "failed": 145,
+    "blocked": 7,
+    "timed_out": 705,
+    "explicitly_excluded": 0,
+    "pending": 0,
+    "buckets": {
+      "2xx": 120070,
+      "3xx": 2386,
+      "4xx": 1,
+      "5xx": 2466,
+      "Timeout": 705,
+      "DNS/Network": 145,
+      "SSL": 0,
+      "Robots blocked": 4,
+      "WAF blocked": 0,
+      "Other errors": 3
+    }
+  },
+  "relationships": {
+    "raw_occurrences_extracted": 4384594,
+    "persisted_relationships": 4333223,
+    "csv_relationships": 4333223,
+    "excel_relationships": 4333223,
+    "broken_relationships": 27305,
+    "redirect_relationships": 73173,
+    "external_relationships": 120060,
+    "by_scope": {
+      "INTERNAL": 4213147,
+      "EXTERNAL": 120060,
+      "NON_HTTP": 13,
+      "FRAGMENT": 3
+    },
+    "by_type": {
+      "CANONICAL": 119853,
+      "IFRAME": 119861,
+      "ANCHOR": 4093509
+    },
+    "by_validation_source": {
+      "NEW_CHECK": 125780,
+      "REUSED": 4207427,
+      "NON_HTTP_SKIPPED": 13,
+      "FRAGMENT_SKIPPED": 3
+    }
+  },
+  "trust_gate": {
+    "every_source_page_has_terminal_state": true,
+    "every_http_destination_has_validation_state": true,
+    "every_relationship_has_source_and_dest": true,
+    "http_relationships_eq_new_plus_reused": true,
+    "new_http_checks_eq_unique_http_destinations": true,
+    "csv_relationships_eq_db_relationships": true,
+    "all_relationships_reconciled": true,
+    "unique_dest_buckets_eq_unique_http_total": true,
+    "business_summary_eq_rel_total": true,
+    "language_summary_eq_rel_total": true,
+    "page_type_summary_eq_rel_total": true,
+    "db_integrity_ok": true
+  },
+  "trust_gate_passed": true
+}
