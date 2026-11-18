@@ -1,0 +1,3 @@
+rps= 8.0: baseline ≈  5.36 h | optimized ≈  4.53 h | saving ≈ 0.83 h (15%)
+rps=10.0: baseline ≈  4.89 h | optimized ≈  3.63 h | saving ≈ 1.26 h (26%)
+rps=12.0: baseline ≈  4.63 h | optimized ≈  3.02 h | saving ≈ 1.60 h (35%)

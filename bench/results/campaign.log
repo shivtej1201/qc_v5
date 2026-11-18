@@ -1,0 +1,13 @@
+=== 15:03:04 --engine baseline --code-dir /home/user/qc_v5_baseline --sources 800 --rps 8 --prefill-rels 3500000 --template-db /tmp/claude-0/-home-user/000be443-7185-5799-9970-0537d979befc/scratchpad/bench_tpl.db --out bench/results/A_scale_baseline.json
+=== 15:07:59 --engine optimized --code-dir . --sources 800 --rps 8 --prefill-rels 3500000 --template-db /tmp/claude-0/-home-user/000be443-7185-5799-9970-0537d979befc/scratchpad/bench_tpl.db --out bench/results/A_scale_optimized.json
+=== 15:10:30 --engine baseline --code-dir /home/user/qc_v5_baseline --sources 3000 --rps 8 --out bench/results/B_fresh_baseline.json
+=== 15:17:11 --engine optimized --code-dir . --sources 3000 --rps 8 --out bench/results/B_fresh_optimized.json
+=== 15:23:52 --engine optimized --code-dir . --sources 1200 --rps 6 --waf-rps 15 --waf-block 20 --out bench/results/C_matrix_6.json
+=== 15:27:26 --engine optimized --code-dir . --sources 1200 --rps 8 --waf-rps 15 --waf-block 20 --out bench/results/C_matrix_8.json
+=== 15:30:07 --engine optimized --code-dir . --sources 1200 --rps 10 --waf-rps 15 --waf-block 20 --out bench/results/C_matrix_10.json
+=== 15:32:16 --engine optimized --code-dir . --sources 1200 --rps 12 --waf-rps 15 --waf-block 20 --out bench/results/C_matrix_12.json
+=== 15:34:03 --engine optimized --code-dir . --sources 1200 --rps 15 --waf-rps 15 --waf-block 20 --out bench/results/C_matrix_15.json
+WAF observed at 15 rps -> stop increasing
+=== 15:36:04 --engine optimized --code-dir . --sources 3000 --rps 8 --max-rps 20 --rps-window 300 --waf-rps 15 --waf-block 20 --out bench/results/D_adaptive.json
+=== DONE 15:41:56
+A_FINAL_DONE

@@ -1,0 +1,50 @@
+{
+  "engine": "baseline",
+  "sources": 800,
+  "rps_target": 8.0,
+  "latency_ms": 300.0,
+  "prefill_rels": 3500000,
+  "waf_rps_model": 0.0,
+  "wall_sec": 234.8,
+  "source_pages_per_sec": 3.41,
+  "relationships_persisted_live": 29099,
+  "relationships_per_sec": 123.9,
+  "status": "COMPLETED",
+  "unique_http_destinations": 100874,
+  "new_http_validations": 100874,
+  "reused_http_validations": 3427628,
+  "server_requests": {
+    "robots": 2,
+    "source_page": 802,
+    "extra_dest": 49,
+    "external": 26
+  },
+  "server_total_requests": 879,
+  "primary_requests": 853,
+  "achieved_primary_rps": 4.67,
+  "max_primary_req_in_any_1s": 10,
+  "duplicate_paths": 3,
+  "duplicate_examples": [
+    [
+      "P/p/0",
+      2
+    ],
+    [
+      "P/p/40",
+      2
+    ],
+    [
+      "P/d/1",
+      2
+    ]
+  ],
+  "waf_403_served": 0,
+  "waf_blocks": 0,
+  "rss_peak_mb": 223.6,
+  "cpu_avg_pct": 97.5,
+  "cpu_peak_pct": 112.0,
+  "engine_performance": null,
+  "counter_reconciliation": null,
+  "cooldowns": 0,
+  "target_rps_final": 8.0
+}

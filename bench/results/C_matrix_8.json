@@ -1,0 +1,93 @@
+{
+  "engine": "optimized",
+  "sources": 1200,
+  "rps_target": 8.0,
+  "latency_ms": 300.0,
+  "prefill_rels": 0,
+  "waf_rps_model": 15.0,
+  "wall_sec": 160.0,
+  "source_pages_per_sec": 7.5,
+  "relationships_persisted_live": 43915,
+  "relationships_per_sec": 274.5,
+  "status": "COMPLETED",
+  "unique_http_destinations": 1298,
+  "new_http_validations": 1298,
+  "reused_http_validations": 42617,
+  "server_requests": {
+    "robots": 3,
+    "source_page": 1202,
+    "external": 26,
+    "extra_dest": 74
+  },
+  "server_total_requests": 1305,
+  "primary_requests": 1279,
+  "achieved_primary_rps": 8.02,
+  "max_primary_req_in_any_1s": 9,
+  "duplicate_paths": 4,
+  "duplicate_examples": [
+    [
+      "P/p/0",
+      2
+    ],
+    [
+      "P/p/40",
+      2
+    ],
+    [
+      "P/d/1",
+      2
+    ],
+    [
+      "P/d/51",
+      2
+    ]
+  ],
+  "waf_403_served": 0,
+  "waf_blocks": 0,
+  "rss_peak_mb": 84.4,
+  "cpu_avg_pct": 9.5,
+  "cpu_peak_pct": 14.0,
+  "engine_performance": {
+    "elapsed_sec": 159.9,
+    "source_fetches": 1200,
+    "source_pages_per_sec": 7.5,
+    "dest_validations_http": 98,
+    "dest_validations_per_sec": 0.61,
+    "source_seeded_validations": 1200,
+    "dest_skipped_already_validated": 0,
+    "relationships_persisted_this_run": 43915,
+    "http_requests_total": 1303,
+    "primary_requests_paced": 1277,
+    "robots_fetches": 2,
+    "achieved_primary_rps": 7.99,
+    "target_rps_final": 8.0,
+    "akamai_cooldowns": 0,
+    "waf_events": 0,
+    "status_403": 0,
+    "status_429": 0,
+    "timeouts": 0,
+    "network_errors": 0,
+    "latency_avg_ms": 319.4,
+    "latency_p95_ms": 535.3,
+    "db_flushes": 157,
+    "db_rows_written": 49009,
+    "db_writes_per_sec": 306.5,
+    "db_flush_avg_ms": 10.78,
+    "db_flush_p95_ms": 27.63,
+    "write_q_peak": 1,
+    "dest_q_peak": 4,
+    "parse_q_peak": 2,
+    "rss_peak_mb": 83.2,
+    "cpu_avg_pct": 9.4,
+    "cpu_peak_pct": 12.2,
+    "reconciliations": 0,
+    "reconciliation_mismatches": 0,
+    "rps_history": []
+  },
+  "counter_reconciliation": {
+    "passed": true,
+    "diffs": {}
+  },
+  "cooldowns": 0,
+  "target_rps_final": 8.0
+}

@@ -152,10 +152,11 @@ class Classifier:
 
         return tag_1_selected, tag_2_selected, diagnostics
 
-    def classify_from_html(self, requested_url: str, final_url: str, html: str) -> ClassificationResult:
+    def classify_from_html(self, requested_url: str, final_url: str, html: str, parser: Optional[Parser] = None) -> ClassificationResult:
         # Note: Gating on "bajajfinserv.in" removed per Phase 10.9.2 requirements
-        parser = None
-        if html:
+        # `parser` may be an already-fed Parser for this exact HTML (on-page audit parse-once path);
+        # when omitted the HTML is parsed here exactly as before.
+        if parser is None and html:
             parser = Parser(final_url or requested_url)
             try:
                 parser.feed(html)

@@ -1,0 +1,23 @@
+# measured with bench/bench_db.py and bench/bench_parser.py on this container (4 vCPU)
+1) hot-path sync_job_counters() cost vs relationship table size
+  rels=  250,042  sync_job_counters() =    214.1 ms/call
+  rels=1,000,163  sync_job_counters() =   1963.8 ms/call
+  rels=2,000,313  sync_job_counters() =   4548.0 ms/call
+  rels=3,000,482  sync_job_counters() =   7830.2 ms/call
+  rels=4,350,700  sync_job_counters() =  11751.2 ms/call
+2) relationship write throughput per batch size (35 rels/source page, 1M rows pre-filled)
+  batch=  100 pages (  3500 rows):    30,261 rows/s | txn median   107.5 ms max   239.5 ms
+  batch=  250 pages (  8750 rows):    38,196 rows/s | txn median   228.3 ms max   244.1 ms
+  batch=  500 pages ( 17500 rows):    45,734 rows/s | txn median   370.7 ms max   430.4 ms
+  batch= 1000 pages ( 35000 rows):    57,900 rows/s | txn median   601.4 ms max   626.6 ms
+3) index write cost (batch=250 pages)
+  all current indexes                                   36,117 rows/s | txn median   224.4 ms
+  - idx_oplr_job (dup of UNIQUE prefix)                 36,951 rows/s | txn median   236.6 ms
+  - idx_oplr_job, idx_oplr_valsrc, idx_oplr_scope       41,330 rows/s | txn median   210.3 ms
+4) parser (137 KB page): 7.6 ms/page single thread
+  inline       122.8 pages/s | loop lag mean 212.42 ms p99  266.67 ms max  280.05 ms
+  to_thread    114.8 pages/s | loop lag mean  30.96 ms p99   86.92 ms max   88.04 ms
+  pool1        125.2 pages/s | loop lag mean  13.82 ms p99   54.91 ms max   63.58 ms
+  pool2        120.1 pages/s | loop lag mean  14.28 ms p99   59.52 ms max   66.78 ms
+  proc2        237.6 pages/s | loop lag mean   0.52 ms p99    1.12 ms max    1.16 ms
+  proc3        361.4 pages/s | loop lag mean   0.57 ms p99    1.10 ms max    1.12 ms
