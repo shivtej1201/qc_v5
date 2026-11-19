@@ -458,6 +458,157 @@ async def get_on_page_audit_stats_endpoint(job_id: str):
         raise HTTPException(404, "On-page audit job not found")
     return stats
 
+# =====================================================================================
+# On-page URL + image audit service (dashboard API). Audits run as isolated, resumable
+# worker processes; ONE active crawl per primary domain.
+# =====================================================================================
+from onpage_service import AuditConflict, OnPageAuditService, PRESETS as ONPAGE_PRESETS, estimate_duration
+
+onpage = OnPageAuditService(db_path=db.db_path, allow_local=getattr(settings, "ALLOW_LOCAL_TESTING", False),
+                            base_dir=os.environ.get("QC_ONPAGE_DATA_DIR") or None,
+                            reports_dir=os.environ.get("QC_ONPAGE_REPORTS_DIR") or None)
+
+
+class OnPageStartRequest(BaseModel):
+    name: str = "On-page audit"
+    urls: Optional[List[str]] = None
+    sitemap_import_id: Optional[str] = None
+    preset: str = "conservative"
+    overrides: Optional[Dict[str, Any]] = None
+    primary_domain: Optional[str] = None
+
+
+def _onpage_call(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except AuditConflict as e:
+        raise HTTPException(409, str(e))
+    except (KeyError, FileNotFoundError):
+        raise HTTPException(404, "Not found (unknown audit, or the report is not built yet)")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/on-page/presets")
+async def onpage_presets():
+    return {"presets": ONPAGE_PRESETS}
+
+
+@app.get("/api/on-page/estimate")
+async def onpage_estimate(pages: int, rps: float, images_on_primary: bool = False):
+    if pages < 0 or pages > settings.MAX_URLS_PER_JOB or rps <= 0 or rps > 1000:
+        raise HTTPException(400, "pages/rps out of range")
+    return estimate_duration(pages, rps, images_on_primary)
+
+
+@app.get("/api/on-page/audits")
+async def onpage_list():
+    jobs = onpage.list_jobs()
+    for j in jobs:
+        j["stats"] = await db.get_on_page_audit_stats(j["job_id"])
+    return {"audits": jobs}
+
+
+@app.post("/api/on-page/audits")
+async def onpage_start(req: OnPageStartRequest):
+    urls = list(req.urls or [])
+    if req.sitemap_import_id:
+        urls += await db.get_selected_urls_for_crawl(req.sitemap_import_id)
+    if len(urls) > settings.MAX_URLS_PER_JOB:
+        raise HTTPException(400, f"{len(urls)} URLs exceeds the limit of {settings.MAX_URLS_PER_JOB}")
+    return _onpage_call(onpage.start, req.name, urls, req.preset, req.overrides, req.primary_domain)
+
+
+@app.post("/api/on-page/audits/upload")
+async def onpage_start_upload(file: UploadFile = File(...), name: str = Form("On-page audit"),
+                              preset: str = Form("conservative"), target_rps: Optional[float] = Form(None),
+                              primary_domain: Optional[str] = Form(None)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".txt", ".csv", ".xlsx"):
+        raise HTTPException(400, "Upload a .txt (one URL per line), .csv or .xlsx file")
+    tmp = os.path.join("uploads", f"onpage_{uuid.uuid4().hex}{ext}")
+    with open(tmp, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            f.write(chunk)
+    try:
+        if ext == ".txt":
+            with open(tmp, encoding="utf-8-sig", errors="replace") as f:
+                urls = [l.strip() for l in f if l.strip()]
+        else:
+            sheet = "CSV Data" if ext == ".csv" else (await job_manager.parse_sheets(tmp) or [{"name": ""}])[0]["name"]
+            urls = [u for chunk in job_manager._iter_url_chunks(tmp, sheet) for u in chunk]
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if len(urls) > settings.MAX_URLS_PER_JOB:
+        raise HTTPException(400, f"{len(urls)} URLs exceeds the limit of {settings.MAX_URLS_PER_JOB}")
+    overrides = {"target_rps": target_rps} if target_rps else None
+    return _onpage_call(onpage.start, name, urls, preset, overrides, primary_domain)
+
+
+@app.get("/api/on-page/audits/{job_id}")
+async def onpage_detail(job_id: str):
+    d = _onpage_call(onpage.describe, job_id)
+    d["stats"] = await db.get_on_page_audit_stats(job_id)
+    d["health"] = onpage.health_score(job_id)
+    d["log_tail"] = onpage.log_tail(job_id, 15)
+    return d
+
+
+@app.post("/api/on-page/audits/{job_id}/stop")
+async def onpage_stop(job_id: str):
+    return _onpage_call(onpage.stop, job_id)
+
+
+@app.post("/api/on-page/audits/{job_id}/resume")
+async def onpage_resume(job_id: str):
+    return _onpage_call(onpage.resume, job_id)
+
+
+@app.get("/api/on-page/audits/{job_id}/insights")
+async def onpage_insights(job_id: str):
+    stats = await db.get_on_page_audit_stats(job_id)
+    return {"insights": _onpage_call(onpage.insights, job_id, stats)}
+
+
+@app.get("/api/on-page/audits/{job_id}/issues/overview")
+async def onpage_issue_overview(job_id: str):
+    return _onpage_call(onpage.issue_overview, job_id)
+
+
+@app.get("/api/on-page/audits/{job_id}/issues")
+async def onpage_issues(job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
+                        category: Optional[str] = None, q: Optional[str] = None, offset: int = 0, limit: int = 100):
+    if severity and severity not in ("HIGH", "MEDIUM", "LOW", "INFO"):
+        raise HTTPException(400, "severity must be HIGH, MEDIUM, LOW or INFO")
+    return _onpage_call(onpage.issues, job_id, severity, issue_type, category, q, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/pages")
+async def onpage_pages(job_id: str, limit: int = 25):
+    return {"pages": _onpage_call(onpage.worst_pages, job_id, limit)}
+
+
+@app.get("/api/on-page/audits/{job_id}/package")
+async def onpage_package(job_id: str):
+    path = _onpage_call(onpage.package_zip, job_id)
+    if not os.path.exists(path):
+        raise HTTPException(404, "Report package not built yet")
+    return FileResponse(path, filename=f"{job_id}_QC_V5_ONPAGE_AUDIT.zip", media_type="application/zip")
+
+
+@app.get("/api/on-page/audits/{job_id}/files/{name}")
+async def onpage_file(job_id: str, name: str):
+    if not re.match(r"^\d\d_[a-z_]+\.csv$", name):
+        raise HTTPException(400, "Invalid report file name")
+    path = os.path.join(_onpage_call(onpage.package_dir, job_id), name)
+    if not os.path.exists(path):
+        raise HTTPException(404, "Report file not found")
+    return FileResponse(path, filename=f"{job_id}_{name}", media_type="text/csv")
+
+
 @app.get("/api/debug")
 async def get_debug():
     if not daemon: return {"error": "no daemon"}

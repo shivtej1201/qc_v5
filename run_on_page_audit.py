@@ -15,6 +15,8 @@ import sys
 import threading
 import time
 
+import signal
+
 import psutil
 
 from config import settings
@@ -57,6 +59,9 @@ def parse_args(argv=None):
     p.add_argument("--max-pages", type=int, default=0, help="stop after N pages (checkpoint test); 0 = all")
     p.add_argument("--progress-json", default="")
     p.add_argument("--no-package", action="store_true")
+    p.add_argument("--max-source-bytes", type=int, default=5 * 1024 * 1024)
+    p.add_argument("--stop-file", default="", help="graceful stop when this file appears (cross-platform)")
+    p.add_argument("--result-json", default="", help="write the run result (status, metrics, package) here")
     return p.parse_args(argv)
 
 
@@ -94,6 +99,7 @@ def run(a) -> dict:
         probe_url=a.probe_url or None, akamai_cooldown_sec=a.akamai_cooldown_sec,
         read_timeout=a.read_timeout, max_retries=a.max_retries, progress_json_path=a.progress_json or None,
         host_budgets=budgets, host_budget_cooldown_sec=a.host_budget_cooldown_sec,
+        max_source_bytes=a.max_source_bytes,
     )
     proc = psutil.Process()
     peak = {"rss": 0.0, "cpu": []}
@@ -109,9 +115,25 @@ def run(a) -> dict:
     th = threading.Thread(target=sample, daemon=True)
     th.start()
     t0 = time.time()
+    async def _run_with_stop_watch():
+        """Graceful stop on SIGTERM/SIGINT (POSIX) or when --stop-file appears (any OS): in-flight work
+        finishes and is committed; the job stays resumable with the same --job-id."""
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, eng.request_stop)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
+        run_t = asyncio.create_task(eng.run(max_source_pages_this_run=a.max_pages or None))
+        while not run_t.done():
+            if a.stop_file and os.path.exists(a.stop_file):
+                eng.request_stop()
+            await asyncio.wait({run_t}, timeout=1.0)
+        return run_t.result()
+
     try:
         eng.initialize_inventory(entries)
-        stats = asyncio.run(eng.run(max_source_pages_this_run=a.max_pages or None))
+        stats = asyncio.run(_run_with_stop_watch())
     finally:
         eng.close()
         stop.set()
@@ -128,13 +150,20 @@ def run(a) -> dict:
     perf["source_pages_per_sec"] = round(perf.get("source_fetches", 0) / el, 2)
     perf["primary_requests_per_sec"] = perf.get("achieved_primary_rps")
     perf["cooldowns"] = perf.get("akamai_cooldowns")
-    result = {"status": stats.get("status"), "crawl_seconds": round(crawl_sec, 1), "stats": stats, "performance": perf}
-    if not a.no_package and not a.max_pages:
+    stopped = bool(eng._stop_requested)
+    result = {"status": "STOPPED" if stopped else stats.get("status"), "crawl_seconds": round(crawl_sec, 1),
+              "stats": stats, "performance": perf, "stopped": stopped}
+    if not a.no_package and not a.max_pages and not stopped:
         t1 = time.time()
         pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf)
         result["package"] = {k: v for k, v in pkg.items() if k != "summary"}
         result["package_seconds"] = round(time.time() - t1, 1)
         result["final_qc_status"] = pkg["final_qc_status"]
+    if a.result_json:
+        tmp = a.result_json + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, default=str)
+        os.replace(tmp, a.result_json)
     return result
 
 

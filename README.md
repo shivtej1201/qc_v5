@@ -1,0 +1,99 @@
+# QC V5 — Website Audit Intelligence
+
+Audit every sitemap page of a large site — every link, canonical, hreflang, iframe and image on it — validate each
+unique URL exactly once, and turn the results into a prioritized, actionable issue report. Built for
+**10,000 pages in 15–20 minutes** without tripping the site's WAF.
+
+![QC V5 Command Center](docs/design/screenshots/command-center-live.png)
+
+## Highlights
+
+- **Command Center** (`/dashboard/`): live 3D crawl view, time-vs-target gauge, throughput, smart insights, issue
+  explorer, worst pages, one-click reports. Dark and light themes, mobile-ready, accessible.
+- **Fast and safe crawling**: one shared request budget per domain (and optional per-host budgets for CDNs),
+  adaptive rate control with Akamai cooldowns, SSRF checks on every redirect hop, robots.txt honored.
+- **Validate once, keep every relationship**: three-level dedup (same page, across pages, in flight) for links and
+  images; a sitemap page linked from other pages is satisfied by its own fetch.
+- **Actionable reports**: 54 issue types with severity and a specific recommended fix, plus per-type and per-page
+  summaries; 14 streamed CSVs in one ZIP.
+- **Trustworthy numbers**: a 28-check trust gate reconciles every CSV against the database; any mismatch fails the run.
+- **Resumable**: stop and resume any time; API restarts don't interrupt audits.
+
+## Quick start
+
+```bash
+./start.sh            # Windows: start.bat — creates a venv, installs requirements + Chromium, starts the server
+```
+
+Open <http://127.0.0.1:8002/dashboard/> → **New audit** → paste or upload your sitemap URLs → choose a speed preset
+(the wizard shows the predicted duration) → **Launch**. The classic console stays at <http://127.0.0.1:8002/>.
+
+Command line (same engine, same reports):
+
+```bash
+python run_on_page_audit.py --urls sitemap_urls.txt --job-id onpage_10k --primary-domain bajajfinserv.in \
+  --target-rps 12 --max-rps 12 --source-concurrency 20 --dest-concurrency 20 --image-concurrency 30 \
+  --host-budget cms-assets.bajajfinserv.in=20 --out-dir reports/onpage
+```
+
+Re-run with the same `--job-id` to resume. `python run_on_page_audit.py -h` lists every option.
+
+## Speed: what decides 15–20 minutes
+
+The crawler holds whatever request rate you give it (measured 13.99 of 14.0 req/s), so duration is set by the rate the
+target's edge tolerates:
+
+| Primary-domain rate | 10K pages |
+|---|---|
+| 8 req/s (conservative preset) | ~23 min |
+| 12 req/s ("15–20 min target" preset) | ~15 min |
+| 14 req/s (fastest stable on the simulated Akamai model) | 13.1 min measured |
+
+Images on a CDN with its own budget run in parallel; images under the same rate-limited domain add ~70 min per 10K
+pages. Measure the real ceiling from your network with `bench/live_edge_matrix.py` before raising rates.
+
+## Reports (ZIP)
+
+| File | Contents |
+|---|---|
+| `01_summary.csv` | Totals, rates, issue counts by severity, reconciliation + integrity status |
+| `12_issues.csv` | One row per problem: severity, type, page, element, URL, anchor/alt, status, detail, **recommended action** |
+| `13_issue_summary.csv` · `14_page_issue_summary.csv` | Per issue type (unique URLs, pages affected) · per page, worst first |
+| `02`–`10` | Source pages, every link relationship, unique URL validations, every image placement, unique image validations, broken links, redirects, broken images, external links |
+| `11_reconciliation.csv` | The 28 trust-gate checks with expected/actual values |
+
+## Documentation
+
+- [Architecture](docs/architecture/ARCHITECTURE.md): components, pipeline, data model, API, performance model, security, operations
+- [Design system](docs/design/DESIGN_SYSTEM.md): tokens, components, motion, accessibility
+- [10K performance and accuracy report](docs/performance/ON_PAGE_10K_URL_IMAGE_AUDIT.md)
+- [User guide](USER_GUIDE.md) (classic console)
+
+## Project layout
+
+```
+server.py                 FastAPI app (classic APIs + /api/on-page/* + static UIs)
+onpage_service.py         audit lifecycle, presets/estimates, insights, report access
+run_on_page_audit.py      audit worker CLI (engine + CSV/ZIP package)
+on_page_audit_engine.py   crawl + validation pipeline, rate control, checkpoints
+on_page_issue_rules.py    issue types, severity, recommended actions
+on_page_csv_packager.py   streaming reports + trust gate
+html_parser.py · url_normalizer.py · request_errors.py · on_page_schema.py
+job_manager.py · daemon.py · checker.py · db.py      classic bulk URL-status pipeline
+frontend/dashboard/       Command Center (ES modules, design tokens, vendored Three.js)
+frontend/index.html       classic console
+bench/                    simulated edge, benchmarks, live-edge RPS matrix
+docs/                     architecture, design, performance, reports
+test_*.py                 test suites
+```
+
+## Testing
+
+```bash
+python -m pytest -q --ignore=test_container.py --ignore=test_ex.py --ignore=test_html.py --ignore=test_js.py
+```
+
+Key suites: `test_on_page_url_image_audit.py` (extraction, dedup, issues, reports), `test_onpage_dashboard_api.py`
+(service + API end-to-end), `test_dashboard_ui.py` (real-browser UI smoke), `test_url_status_large_volume.py`
+(125K URLs). The four ignored files are scratch scripts that browse live sites. In a sandbox without internet/DNS,
+17 pre-existing tests fail for that reason alone; they pass where public DNS is available.

@@ -13,3 +13,6 @@ artifacts/
 *.xlsx
 .env
 scratch/
+
+# runtime data written by the on-page audit service
+data/
