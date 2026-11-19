@@ -16,3 +16,5 @@ scratch/
 
 # runtime data written by the on-page audit service
 data/
+*.zip
+BAJAJ_MALL_ON_PAGE_URL_AUDIT/

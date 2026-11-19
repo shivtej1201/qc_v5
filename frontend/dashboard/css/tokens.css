@@ -78,6 +78,36 @@
   color-scheme: light;
 }
 
+:root[data-theme="watermelon"] {
+  --bg: #070d18;
+  --bg-elev: #0c1626;
+  --glass: rgba(12, 22, 38, 0.76);
+  --glass-strong: rgba(16, 28, 48, 0.93);
+  --stroke: rgba(0, 229, 153, 0.18);
+  --stroke-strong: rgba(255, 42, 95, 0.36);
+  --text: #f0fdf4;
+  --text-2: #94a3b8;
+  --text-3: #64748b;
+  --brand-500: #ff2a5f;      /* Watermelon Coral/Ruby */
+  --brand-400: #ff5c85;
+  --brand-600: #d61344;
+  --accent-500: #00e599;     /* Watermelon Mint/Rind */
+  --accent-600: #05b075;
+  --sev-high: #ff2a5f;
+  --sev-medium: #f59e0b;
+  --sev-low: #38bdf8;
+  --sev-info: #00e599;
+  --ok: #00e599;
+  --active: #ff5c85;
+  --glow: 0 0 0 1px rgba(255, 42, 95, 0.35), 0 8px 36px -8px rgba(255, 42, 95, 0.45), 0 0 24px rgba(0, 229, 153, 0.22);
+  --shadow: 0 14px 40px -12px rgba(0, 0, 0, 0.75);
+  --backdrop: radial-gradient(1100px 550px at 12% -10%, rgba(255, 42, 95, 0.18), transparent 60%),
+              radial-gradient(900px 500px at 110% 12%, rgba(0, 229, 153, 0.16), transparent 60%),
+              radial-gradient(600px 400px at 50% 100%, rgba(255, 73, 123, 0.08), transparent 60%),
+              linear-gradient(180deg, #070d18 0%, #0a1424 100%);
+  color-scheme: dark;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root { --t-fast: 0ms; --t-med: 0ms; --t-slow: 0ms; }
 }

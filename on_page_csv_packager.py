@@ -214,11 +214,14 @@ def build_on_page_csv_package(
         "classification_method", "raw_url_occurrences", "url_relationships", "raw_image_occurrences",
         "image_relationships", "error_type", "error_message", "remark", "checked_at",
         "page_title", "html_bytes", "html_truncated", "attempts",
+        "canonical_url", "robots_meta", "h1", "h1_count", "title_length", "meta_description_length", "word_count", "structured_data_types",
     ], """SELECT source_page_id, source_page_url, normalized_source_url, source_sitemap, crawl_state,
               initial_http_status, http_status, final_url, redirect_count, redirect_chain, content_type,
               response_time_ms, robots_status, waf_status, business, language, page_type, classification_method,
               raw_occurrences_count, relationships_count, raw_image_occurrences_count, image_relationships_count,
-              error_type, error_message, remark, checked_at, page_title, html_bytes, html_truncated, attempts
+              error_type, error_message, remark, checked_at, page_title, html_bytes, html_truncated, attempts,
+              COALESCE(canonical_url, ''), COALESCE(robots_meta, ''), COALESCE(h1, ''), COALESCE(h1_count, 0),
+              COALESCE(title_length, 0), COALESCE(meta_description_length, 0), COALESCE(word_count, 0), COALESCE(structured_data_types, '')
          FROM on_page_source_pages WHERE job_id = ? ORDER BY source_page_id""", J, on_row=on_source)
 
     url_join = ("FROM on_page_link_relationships r LEFT JOIN on_page_validation_cache c "
@@ -453,9 +456,59 @@ def build_on_page_csv_package(
     with zipfile.ZipFile(zip_path) as z:
         zip_ok = z.testzip() is None and sorted(z.namelist()) == names
     final = "PASS" if (reconciliation_status == "PASS" and zip_ok) else "FAILED"
+
+    # ---------------------------------------------------------------- Report Manifest (Section 22)
+    dataset_mapping = {
+        "01_summary.csv": ("Summary", "Executive Metrics & KPIs"),
+        "02_source_page_audit.csv": ("SourcePages", "Source Page Audit with SEO Signals"),
+        "03_url_audit.csv": ("Links", "Discovered Link Relationships"),
+        "04_unique_url_validation.csv": ("UniqueLinks", "Unique Destination URL Validations"),
+        "05_image_audit.csv": ("Images", "Image Placements & SEO Attributes"),
+        "06_unique_image_validation.csv": ("UniqueImages", "Unique Image Asset Validations"),
+        "07_broken_urls.csv": ("BrokenLinks", "404 and Broken Destination Endpoints"),
+        "08_redirect_urls.csv": ("Redirects", "3xx Redirect Hops and Chains"),
+        "09_broken_images.csv": ("BrokenImages", "Missing or Corrupted Image Assets"),
+        "10_external_urls.csv": ("ExternalLinks", "Outbound Third-Party URLs"),
+        "11_reconciliation.csv": ("TrustGate", "28-Point Mathematical Reconciliation"),
+        "12_issues.csv": ("Issues", "Granular Issue Records with Remediation Actions"),
+        "13_issue_summary.csv": ("IssueRollup", "Issue Summary Grouped by Issue Type"),
+        "14_page_issue_summary.csv": ("PageIssues", "Source Page Issue Density Rankings"),
+    }
+    manifest_entries = []
+    gen_time = _utc()
+    for fname in names:
+        fpath = out(fname)
+        dset, rtitle = dataset_mapping.get(fname, ("General", fname))
+        fsize = os.path.getsize(fpath) if os.path.exists(fpath) else 0
+        manifest_entries.append({
+            "report_name": rtitle,
+            "dataset": dset,
+            "filename": fname,
+            "row_count": files.get(fname, 0),
+            "file_size": fsize,
+            "generated_at": gen_time,
+            "status": "READY" if os.path.exists(fpath) else "MISSING",
+        })
+    manifest_doc = {
+        "job_id": job_id,
+        "package_name": package_name,
+        "generated_at": gen_time,
+        "total_files": len(manifest_entries),
+        "manifest": manifest_entries,
+        "files": manifest_entries,
+    }
+    try:
+        with open(os.path.join(output_dir, "manifest.json"), "w", encoding="utf-8") as mf:
+            json.dump(manifest_doc, mf, indent=2)
+        with open(os.path.join(work, "manifest.json"), "w", encoding="utf-8") as mf2:
+            json.dump(manifest_doc, mf2, indent=2)
+    except Exception:
+        pass
+
     return {
         "zip_path": zip_path, "zip_verified": zip_ok, "zip_bytes": os.path.getsize(zip_path),
         "csv_bytes": sum(os.path.getsize(out(n)) for n in names), "files": files, "work_dir": work,
+        "manifest": manifest_entries, "manifest_doc": manifest_doc,
         "reconciliation": [dict(zip(("check", "expected", "actual", "status"), r)) for r in recon_rows],
         "reconciliation_status": reconciliation_status, "database_integrity": integrity,
         "final_qc_status": final, "summary": dict(summary), "build_seconds": round(time.time() - t0, 2),

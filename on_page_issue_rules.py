@@ -90,6 +90,17 @@ ACTIONS: Dict[str, str] = {
     "NON_HTML_SOURCE": "Sitemap URL is not an HTML page (Content-Type). Confirm it belongs in the page sitemap.",
     "SLOW_RESPONSE": "Page took more than 3 s to respond. Investigate server/CDN performance.",
     "CLASSIFICATION_NEEDS_REVIEW": "Business/page type could not be determined from tags, data-pageType or URL. Add tag-1/tag-2 meta tags.",
+    # On-page SEO & Content signals
+    "ROBOTS_NOINDEX": "Sitemap URL has meta robots noindex tag. Remove noindex or exclude the page from the sitemap.",
+    "TITLE_TOO_SHORT": "Page title is shorter than 30 characters. Expand to 30-65 characters.",
+    "TITLE_TOO_LONG": "Page title exceeds 65 characters and may be truncated. Shorten to under 65 characters.",
+    "META_DESCRIPTION_MISSING": "Page lacks a meta description. Add a descriptive meta description (70-160 characters).",
+    "META_DESCRIPTION_TOO_SHORT": "Meta description is shorter than 70 characters. Expand to 70-160 characters.",
+    "META_DESCRIPTION_TOO_LONG": "Meta description exceeds 160 characters. Keep under 160 characters.",
+    "MISSING_H1": "Page has no H1 heading. Add a single descriptive H1 heading.",
+    "MULTIPLE_H1": "Page has multiple H1 headings. Keep a single primary H1 heading and use H2 for subheadings.",
+    "LOW_WORD_COUNT": "Page has thin content (under 100 words). Add relevant, helpful content.",
+    "INSECURE_MIXED_CONTENT": "HTTPS page loads insecure HTTP sub-resources (scripts, styles, media). Update resources to https://.",
 }
 
 ELEMENT_CATEGORY = {"CANONICAL": "CANONICAL", "HREFLANG": "HREFLANG", "IFRAME": "IFRAME"}
@@ -322,4 +333,42 @@ def source_issues(r: Dict[str, Any], canon: Optional[Tuple[int, str]], anchors: 
     if r.get("page_type") == "NEEDS_REVIEW" or r.get("business") == "NEEDS_REVIEW":
         out.append(("SOURCE_PAGE", "CLASSIFICATION_NEEDS_REVIEW", "INFO",
                     f"business={r.get('business')}, page_type={r.get('page_type')}"))
+
+    # Technical SEO / On-Page signals (category="SEO" so SOURCE_PAGE tests remain unaffected)
+    robots_meta = str(r.get("robots_meta") or "").lower()
+    if "noindex" in robots_meta:
+        out.append(("SEO", "ROBOTS_NOINDEX", "HIGH", f"Meta robots contains noindex: '{robots_meta[:100]}'"))
+
+    t_len = int(r.get("title_length") or 0)
+    if t_len == 0 and title:
+        t_len = len(title)
+    if t_len > 0 and int(r.get("html_bytes") or 0) > 50:
+        if t_len < 30:
+            out.append(("SEO", "TITLE_TOO_SHORT", "LOW", f"Title length {t_len} chars (< 30)"))
+        elif t_len > 65:
+            out.append(("SEO", "TITLE_TOO_LONG", "LOW", f"Title length {t_len} chars (> 65)"))
+
+    m_desc = str(r.get("meta_description") or "")
+    m_len = int(r.get("meta_description_length") or 0)
+    if m_len == 0 and m_desc:
+        m_len = len(m_desc)
+    if (200 <= (code or 0) <= 299) and int(r.get("html_bytes") or 0) > 50:
+        if m_len == 0:
+            out.append(("SEO", "META_DESCRIPTION_MISSING", "LOW", "No meta description"))
+        elif m_len < 70:
+            out.append(("SEO", "META_DESCRIPTION_TOO_SHORT", "LOW", f"Meta description {m_len} chars (< 70)"))
+        elif m_len > 160:
+            out.append(("SEO", "META_DESCRIPTION_TOO_LONG", "LOW", f"Meta description {m_len} chars (> 160)"))
+
+    h1_cnt = int(r.get("h1_count") or 0)
+    if (200 <= (code or 0) <= 299) and int(r.get("html_bytes") or 0) > 50:
+        if h1_cnt == 0:
+            out.append(("SEO", "MISSING_H1", "MEDIUM", "Page has no H1 heading"))
+        elif h1_cnt > 1:
+            out.append(("SEO", "MULTIPLE_H1", "LOW", f"Page has {h1_cnt} H1 headings"))
+
+    wc = int(r.get("word_count") or 0)
+    if (200 <= (code or 0) <= 299) and int(r.get("html_bytes") or 0) > 500 and wc > 0 and wc < 100:
+        out.append(("SEO", "LOW_WORD_COUNT", "LOW", f"Word count {wc} words (< 100)"))
+
     return out

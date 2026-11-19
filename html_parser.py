@@ -1,7 +1,8 @@
 from html.parser import HTMLParser
+import re
 import urllib.parse
 from config import settings
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set, Tuple
 
 
 def parse_srcset(value: str) -> List[str]:
@@ -73,6 +74,46 @@ class Parser(HTMLParser):
         self.ignored_elements = ('header', 'footer', 'nav')
         self.preferred_selectors = ('main', 'article') # simplified preferred
 
+        # SEO & Technical Headings / Metadata
+        self.robots_meta = ""
+        self.h1_texts: List[str] = []
+        self.heading_counts = {"h1": 0, "h2": 0, "h3": 0, "h4": 0, "h5": 0, "h6": 0}
+        self.og_title = ""
+        self.og_image = ""
+        self.twitter_card = ""
+        self.meta_refresh = ""
+        self.structured_data_types: Set[str] = set()
+        self._current_heading_tag = None
+        self._current_heading_text = ""
+        self._in_script_ldjson = False
+        self._script_ldjson_text = ""
+        self._body_text_chunks: List[str] = []
+
+    @property
+    def primary_h1(self) -> str:
+        return self.h1_texts[0] if self.h1_texts else ""
+
+    @property
+    def h1_count(self) -> int:
+        return self.heading_counts.get("h1", 0)
+
+    @property
+    def title_length(self) -> int:
+        return len((self.title or "").strip())
+
+    @property
+    def meta_description_length(self) -> int:
+        return len((self.meta_desc or "").strip())
+
+    @property
+    def word_count(self) -> int:
+        full_text = " ".join(self._body_text_chunks)
+        return len(full_text.split())
+
+    @property
+    def structured_data_summary(self) -> str:
+        return ", ".join(sorted(self.structured_data_types))
+
     @property
     def data_pagetype(self) -> str:
         candidates = self.content_data_pagetypes or self.header_data_pagetypes
@@ -94,12 +135,25 @@ class Parser(HTMLParser):
                 
         elif tag == 'meta':
             self.meta_tags.append(attr_dict)
-            name = attr_dict.get('name', '')
+            name = (attr_dict.get('name') or '').strip().lower()
+            prop = (attr_dict.get('property') or '').strip().lower()
+            http_equiv = (attr_dict.get('http-equiv') or '').strip().lower()
+            content = (attr_dict.get('content') or '').strip()
             if name == 'description':
-                self.meta_desc = attr_dict.get('content', '')
-            meta_key = (attr_dict.get('property') or name or '').strip().lower()
+                self.meta_desc = content
+            elif name == 'robots':
+                self.robots_meta = content
+            elif name == 'twitter:card':
+                self.twitter_card = content
+            if prop == 'og:title':
+                self.og_title = content
+            elif prop == 'og:image':
+                self.og_image = content
+            if http_equiv == 'refresh':
+                self.meta_refresh = content
+
+            meta_key = (prop or name or '').strip().lower()
             if meta_key in self._img_meta:
-                content = (attr_dict.get('content') or '').strip()
                 if content:
                     self._add_image(content, meta_key, None, {}, 'Head' if self.in_head else self._identify_component())
                 
@@ -138,6 +192,80 @@ class Parser(HTMLParser):
                     'rel': rel,
                     'hreflang': hreflang,
                     'component': 'Head' if self.in_head else self._identify_component(),
+                })
+            elif link_href and 'stylesheet' in rel_tokens:
+                self.all_on_page_urls.append({
+                    'href': link_href,
+                    'text': '',
+                    'url_type': 'STYLESHEET',
+                    'rel': rel,
+                    'hreflang': hreflang,
+                    'component': 'Head' if self.in_head else self._identify_component(),
+                })
+
+        # Structured data microdata
+        if 'itemtype' in attr_dict:
+            val = str(attr_dict['itemtype']).strip().rstrip('/').split('/')[-1]
+            if val:
+                self.structured_data_types.add(val)
+
+        # Headings h1-h6
+        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            self.heading_counts[tag] = self.heading_counts.get(tag, 0) + 1
+            self._current_heading_tag = tag
+            self._current_heading_text = ""
+
+        # Script tags
+        if tag == 'script':
+            stype = (attr_dict.get('type') or '').strip().lower()
+            if stype == 'application/ld+json':
+                self._in_script_ldjson = True
+                self._script_ldjson_text = ""
+            src = attr_dict.get('src', '').strip()
+            if src:
+                self.all_on_page_urls.append({
+                    'href': src,
+                    'text': '',
+                    'url_type': 'SCRIPT',
+                    'rel': '',
+                    'hreflang': '',
+                    'component': 'Head' if self.in_head else self._identify_component(),
+                })
+
+        # Form tags
+        elif tag == 'form':
+            action = attr_dict.get('action', '').strip()
+            if action:
+                self.all_on_page_urls.append({
+                    'href': action,
+                    'text': '',
+                    'url_type': 'FORM',
+                    'rel': '',
+                    'hreflang': '',
+                    'component': self._identify_component(),
+                })
+
+        # Video / Audio media tags
+        elif tag in ('video', 'audio'):
+            src = attr_dict.get('src', '').strip()
+            if src:
+                self.all_on_page_urls.append({
+                    'href': src,
+                    'text': '',
+                    'url_type': 'MEDIA',
+                    'rel': '',
+                    'hreflang': '',
+                    'component': self._identify_component(),
+                })
+            poster = attr_dict.get('poster', '').strip()
+            if poster:
+                self.all_on_page_urls.append({
+                    'href': poster,
+                    'text': '',
+                    'url_type': 'MEDIA',
+                    'rel': '',
+                    'hreflang': '',
+                    'component': self._identify_component(),
                 })
                 
         dpt = attr_dict.get('data-pagetype')
@@ -270,6 +398,19 @@ class Parser(HTMLParser):
             if self.current_on_page_anchor:
                 self.all_on_page_urls.append(self.current_on_page_anchor)
                 self.current_on_page_anchor = None
+
+        if tag == self._current_heading_tag:
+            if tag == 'h1':
+                txt = " ".join(self._current_heading_text.split()).strip()
+                if txt:
+                    self.h1_texts.append(txt)
+            self._current_heading_tag = None
+            self._current_heading_text = ""
+        elif tag == 'script' and self._in_script_ldjson:
+            self._in_script_ldjson = False
+            for m in re.finditer(r'"@type"\s*:\s*"([^"]+)"', self._script_ldjson_text):
+                self.structured_data_types.add(m.group(1))
+            self._script_ldjson_text = ""
             
         if self.path:
             self.path.pop()
@@ -281,6 +422,12 @@ class Parser(HTMLParser):
             self.current_anchor['text'] += data
         if self.current_on_page_anchor:
             self.current_on_page_anchor['text'] += data
+        if self._current_heading_tag:
+            self._current_heading_text += data
+        if self._in_script_ldjson:
+            self._script_ldjson_text += data
+        if not self.in_head and getattr(self, "current_tag", None) not in ('script', 'style'):
+            self._body_text_chunks.append(data)
             
     def _identify_component(self):
         for tag, attrs in reversed(self.path):

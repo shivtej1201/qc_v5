@@ -96,8 +96,8 @@ class SitemapExtractor:
     def __init__(
         self,
         max_depth: int = 5,
-        max_response_size: int = 10 * 1024 * 1024, # 10MB
-        max_urls: int = 50000,
+        max_response_size: int = 50 * 1024 * 1024, # 50MB for large enterprise sitemaps
+        max_urls: int = 250000, # Supports 150K+ crawling
         timeout: float = 15.0,
         concurrency: int = 5,
         allow_local: bool = False,
@@ -105,8 +105,8 @@ class SitemapExtractor:
         use_browser_fallback: bool = True
     ):
         self.max_depth = max_depth
-        self.max_response_size = max_response_size
-        self.max_urls = max_urls
+        self.max_response_size = int(max_response_size)
+        self.max_urls = int(getattr(settings, "MAX_SITEMAP_URLS", max_urls))
         self.timeout = timeout
         self.concurrency = concurrency
         self.allow_local = allow_local
@@ -464,7 +464,21 @@ class SitemapExtractor:
         }
         """
         decompressed = self._decompress_if_gzip(xml_bytes, sitemap_url_or_name, max_size=self.max_response_size)
-        root = self._safe_parse_xml(decompressed)
+        try:
+            root = self._safe_parse_xml(decompressed)
+        except Exception:
+            # Fallback regex extraction for malformed or truncated XML documents
+            text_snippet = decompressed.decode("utf-8", errors="ignore")
+            locs = re.findall(r"<loc>\s*([^<>\s]+)\s*</loc>", text_snippet, flags=re.IGNORECASE)
+            is_index = "<sitemapindex" in text_snippet.lower() or "<sitemap>" in text_snippet.lower()
+            if locs:
+                if is_index:
+                    child_sitemaps = [{"loc": urllib.parse.urljoin(sitemap_url_or_name, l) if sitemap_url_or_name else l, "lastmod": ""} for l in locs]
+                    return {"is_index": True, "child_sitemaps": child_sitemaps, "urls": []}
+                else:
+                    urls = [{"loc": urllib.parse.urljoin(sitemap_url_or_name, l) if sitemap_url_or_name else l, "lastmod": "", "changefreq": "", "priority": 0.5} for l in locs]
+                    return {"is_index": False, "child_sitemaps": [], "urls": urls}
+            raise
         
         root_tag = _strip_tag_ns(root.tag).lower()
         
@@ -483,6 +497,8 @@ class SitemapExtractor:
                         elif sub_tag == "lastmod" and sub.text:
                             lastmod = sub.text.strip()
                     if loc:
+                        if sitemap_url_or_name and not loc.startswith(("http://", "https://")):
+                            loc = urllib.parse.urljoin(sitemap_url_or_name, loc)
                         child_sitemaps.append({"loc": loc, "lastmod": lastmod})
             return {"is_index": True, "child_sitemaps": child_sitemaps, "urls": []}
             
@@ -507,6 +523,8 @@ class SitemapExtractor:
                             except ValueError:
                                 priority = 0.5
                     if loc:
+                        if sitemap_url_or_name and not loc.startswith(("http://", "https://")):
+                            loc = urllib.parse.urljoin(sitemap_url_or_name, loc)
                         urls.append({
                             "loc": loc,
                             "lastmod": lastmod,
@@ -559,9 +577,13 @@ class SitemapExtractor:
                 errors.append(f"Exceeded maximum sitemap nesting depth of {self.max_depth} for '{current_sitemap}'.")
                 continue
 
-            # Fetch sitemap
+            # Fetch sitemap with diagnostics measurement
+            t_fetch_start = time.perf_counter()
             async with self.semaphore:
                 body, status_code, headers, redirects, diag = await self._safe_fetch(current_sitemap)
+            fetch_time_ms = round((time.perf_counter() - t_fetch_start) * 1000, 2)
+            content_type = (headers.get("content-type") or "") if headers else ""
+            size_bytes = len(body) if body else 0
 
             if diag:
                 diagnostics.append({
@@ -603,6 +625,10 @@ class SitemapExtractor:
                     "depth": depth,
                     "status": "FAILED",
                     "http_status": status_code,
+                    "content_type": content_type,
+                    "response_time_ms": fetch_time_ms,
+                    "size_bytes": size_bytes,
+                    "child_sitemap_count": 0,
                     "urls_found": 0,
                     "error_message": error_msg,
                     "classification": classification
@@ -636,6 +662,10 @@ class SitemapExtractor:
                     "depth": depth,
                     "status": "FAILED",
                     "http_status": status_code,
+                    "content_type": content_type,
+                    "response_time_ms": fetch_time_ms,
+                    "size_bytes": size_bytes,
+                    "child_sitemap_count": 0,
                     "urls_found": 0,
                     "error_message": err_msg,
                     "classification": "SITEMAP_XML_INVALID"
@@ -647,14 +677,18 @@ class SitemapExtractor:
 
             # Process sitemap index child sitemaps
             if parsed["is_index"]:
-                urls_found = len(parsed["child_sitemaps"])
+                child_count = len(parsed["child_sitemaps"])
                 sitemap_sources.append({
                     "sitemap_url": current_sitemap,
                     "parent_sitemap_url": parent_sitemap,
                     "depth": depth,
                     "status": "INDEX_PARSED",
                     "http_status": status_code,
-                    "urls_found": urls_found,
+                    "content_type": content_type,
+                    "response_time_ms": fetch_time_ms,
+                    "size_bytes": size_bytes,
+                    "child_sitemap_count": child_count,
+                    "urls_found": child_count,
                     "error_message": "",
                     "classification": "VALID"
                 })
@@ -674,6 +708,10 @@ class SitemapExtractor:
                     "depth": depth,
                     "status": "PARSED",
                     "http_status": status_code,
+                    "content_type": content_type,
+                    "response_time_ms": fetch_time_ms,
+                    "size_bytes": size_bytes,
+                    "child_sitemap_count": 0,
                     "urls_found": urls_found,
                     "error_message": "",
                     "classification": "VALID"
