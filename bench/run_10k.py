@@ -53,14 +53,16 @@ def main():
     p.add_argument("--keep", default="", help="copy the ZIP + summary here")
     p.add_argument("--keep-dir", default="", help="copy the unzipped CSV folder here")
     p.add_argument("--out", required=True)
+    p.add_argument("--keep-db", default="", help="copy the audit SQLite DB here (profiling / re-packaging)")
+    p.add_argument("--no-waf", action="store_true", help="no Akamai model on the primary host (engine capacity test)")
     a = p.parse_args()
     a.out = os.path.abspath(a.out)
 
     work = tempfile.mkdtemp(prefix="qc_10k_")
     sim = subprocess.Popen([sys.executable, os.path.join(HERE, "sim_edge.py"), "--sources", str(a.sources),
                             "--port", str(a.port), "--latency-ms", str(a.latency_ms), "--images",
-                            "--cdn-latency-ms", str(a.cdn_latency_ms), "--waf-rps", str(a.waf_rps),
-                            "--waf-conc", str(a.waf_conc), "--origin-knee", str(a.origin_knee),
+                            "--cdn-latency-ms", str(a.cdn_latency_ms), "--waf-rps", str(0 if a.no_waf else a.waf_rps),
+                            "--waf-conc", str(0 if a.no_waf else a.waf_conc), "--origin-knee", str(a.origin_knee),
                             "--waf-block", str(a.waf_block), "--cdn-waf-rps", str(a.cdn_waf_rps)])
     try:
         for h in ("127.0.0.1", "127.0.0.2", "127.0.0.3"):
@@ -93,6 +95,8 @@ def main():
         }
         with open(a.out, "w") as f:
             json.dump(out, f, indent=2, default=str)
+        if a.keep_db:
+            shutil.copy(os.path.join(work, "audit.db"), a.keep_db)
         if a.keep_dir and res.get("package"):
             shutil.copytree(res["package"]["work_dir"], a.keep_dir, dirs_exist_ok=True)
         if a.keep and res.get("package"):

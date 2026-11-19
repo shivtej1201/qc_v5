@@ -65,7 +65,26 @@ def parse_args(argv=None):
     p.add_argument("--sitemap-meta", default="",
                    help="JSON from sitemap_config (page -> sitemap/lastmod, sitemap tree) for the sitemap + SEO reports")
     p.add_argument("--no-seo", action="store_true", help="skip SEO / technical-SEO page facts")
+    p.add_argument("--events-log", default="", help="structured JSON-lines stage log (default: <out-dir>/events.jsonl)")
     return p.parse_args(argv)
+
+
+class EventLog:
+    """Structured JSON-lines log (one object per pipeline stage) for observability:
+    {"ts", "job_id", "project_id", "stage": sitemap|inventory|crawl|export|error, "event", ...counts/durations}."""
+
+    def __init__(self, path: str, job_id: str, project_id: str):
+        self.path, self.job_id, self.project_id = path, job_id, project_id
+        if path:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+    def __call__(self, stage: str, event: str, **kw):
+        if not self.path:
+            return
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z", "job_id": self.job_id,
+               "project_id": self.project_id, "stage": stage, "event": event, **kw}
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
 
 
 def store_sitemap_meta(conn, job_id: str, meta: dict):
@@ -117,6 +136,9 @@ def run(a) -> dict:
         else:
             first_of[n] = u
             urls.append(u)
+    ev = EventLog(a.events_log or os.path.join(a.out_dir, "events.jsonl"), a.job_id, a.primary_domain)
+    ev("inventory", "loaded", input_lines=input_total, pages=len(urls), exceptions=len(exceptions),
+       exception_reasons={r: sum(1 for e in exceptions if e[3] == r) for r in {e[3] for e in exceptions}})
     sm_meta = None
     if a.sitemap_meta:
         with open(a.sitemap_meta, encoding="utf-8") as f:
@@ -189,6 +211,10 @@ def run(a) -> dict:
             eng.conn.execute("UPDATE on_page_audit_jobs SET input_urls_total = ? WHERE job_id = ?", (input_total, a.job_id))
         if sm_meta:
             store_sitemap_meta(eng.conn, a.job_id, sm_meta)
+            ev("sitemap", "provenance_loaded", sitemaps=len(sm_meta.get("sources", [])),
+               entries=len(sm_meta.get("entries", [])))
+        ev("crawl", "start", target_rps=a.target_rps, max_rps=a.max_rps, source_concurrency=a.source_concurrency,
+           dest_concurrency=a.dest_concurrency, image_concurrency=a.image_concurrency)
         stats = asyncio.run(_run_with_stop_watch())
     finally:
         eng.close()
@@ -209,6 +235,11 @@ def run(a) -> dict:
     stopped = bool(eng._stop_requested)
     result = {"status": "STOPPED" if stopped else stats.get("status"), "crawl_seconds": round(crawl_sec, 1),
               "stats": stats, "performance": perf, "stopped": stopped}
+    ev("crawl", "stopped" if stopped else "end", status=result["status"], crawl_seconds=result["crawl_seconds"],
+       pages=stats.get("source_pages_processed"), failed=stats.get("source_pages_failed"),
+       blocked=stats.get("source_pages_blocked"), links=stats.get("url_relationships_persisted"),
+       images=stats.get("image_relationships_persisted"), primary_rps=perf.get("achieved_primary_rps"),
+       waf_events=perf.get("waf_events"), timeouts=perf.get("timeouts"), retries=eng.metrics.get("retries", 0))
     if not a.no_package and not a.max_pages and not stopped:
         t1 = time.time()
         pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf,
@@ -216,6 +247,10 @@ def run(a) -> dict:
         result["package"] = {k: v for k, v in pkg.items() if k != "summary"}
         result["package_seconds"] = round(time.time() - t1, 1)
         result["final_qc_status"] = pkg["final_qc_status"]
+        ev("export", "package_built", final_qc_status=pkg["final_qc_status"], csv_seconds=pkg.get("csv_seconds"),
+           zip_seconds=pkg.get("zip_seconds"), zip_bytes=pkg.get("zip_bytes"), files=len(pkg.get("files", {})),
+           issues=pkg["files"].get("12_issues.csv"), score=(pkg.get("score") or {}).get("score"),
+           failed_checks=[r["check"] for r in pkg.get("reconciliation", []) if r["status"] != "PASS"])
     if a.result_json:
         tmp = a.result_json + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:

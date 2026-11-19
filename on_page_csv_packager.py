@@ -74,6 +74,22 @@ def status_class_sql(a: str) -> str:
         WHEN {code} BETWEEN 400 AND 499 THEN '4xx' ELSE '5xx' END"""
 
 
+# Same classes as status_class_sql, computed from the source page's own columns (no self-join: O(pages)).
+SOURCE_STATUS_CLASS_SQL = """CASE
+        WHEN s.crawl_state = 'PENDING' THEN ''
+        WHEN s.robots_status = 'DISALLOWED' OR s.error_type = 'ROBOTS_BLOCKED' THEN 'robots_blocked'
+        WHEN COALESCE(s.waf_status, 'NONE') NOT IN ('', 'NONE') THEN 'waf_blocked'
+        WHEN s.error_type LIKE '%SSRF%' THEN 'ssrf_blocked'
+        WHEN s.crawl_state = 'TIMED_OUT' OR s.error_type = 'Timeout' THEN 'timeout'
+        WHEN s.error_type = 'DNS Error' THEN 'dns_error'
+        WHEN s.error_type = 'SSL Error' THEN 'ssl_error'
+        WHEN COALESCE(s.initial_http_status, s.http_status) IS NULL THEN 'connection_error'
+        WHEN COALESCE(s.initial_http_status, s.http_status) IN (200, 301, 302, 307, 308, 400, 401, 403, 404, 410, 429, 500, 502, 503, 504)
+             THEN CAST(COALESCE(s.initial_http_status, s.http_status) AS TEXT)
+        WHEN COALESCE(s.initial_http_status, s.http_status) BETWEEN 200 AND 299 THEN '2xx'
+        WHEN COALESCE(s.initial_http_status, s.http_status) BETWEEN 300 AND 399 THEN '3xx'
+        WHEN COALESCE(s.initial_http_status, s.http_status) BETWEEN 400 AND 499 THEN '4xx' ELSE '5xx' END"""
+
 IMG_FORMAT_SQL = """CASE
     WHEN LOWER(COALESCE(ic.content_type, '')) LIKE 'image/%' THEN SUBSTR(LOWER(ic.content_type), 7, 12)
     WHEN LOWER(i.normalized_image_url) LIKE '%.jpg%' OR LOWER(i.normalized_image_url) LIKE '%.jpeg%' THEN 'jpeg'
@@ -384,6 +400,13 @@ def build_on_page_csv_package(
                        r["normalized_image_url"], r["alt_text"], r["location"], r["http_status"], r["initial_status"],
                        r["final_url"], r["hop_count"], r["validation_source"])
 
+    # one canonical per page, computed ONCE (a correlated subquery per page scanned every relationship: O(N*R))
+    conn.execute("DROP TABLE IF EXISTS temp._canon")
+    conn.execute("""CREATE TEMP TABLE _canon AS SELECT source_page_url AS page, MIN(normalized_found_url) AS url
+                      FROM on_page_link_relationships WHERE job_id = ? AND found_url_type = 'CANONICAL'
+                     GROUP BY source_page_url""", J)
+    conn.execute("CREATE UNIQUE INDEX temp._canon_page ON _canon(page)")
+
     # ---------------------------------------------------------------- 02 source pages
     files["02_source_page_audit.csv"] = _stream(conn, out("02_source_page_audit.csv"), [
         "source_page_id", "source_page_url", "normalized_source_url", "source_sitemap", "crawl_state",
@@ -400,23 +423,14 @@ def build_on_page_csv_package(
               s.response_time_ms, s.robots_status, s.waf_status, s.business, s.language, s.page_type, s.classification_method,
               s.raw_occurrences_count, s.relationships_count, s.raw_image_occurrences_count, s.image_relationships_count,
               s.error_type, s.error_message, s.remark, s.checked_at, s.page_title, s.html_bytes, s.html_truncated, s.attempts,
-              CASE WHEN s.crawl_state = 'PENDING' THEN '' ELSE {status_class_sql("sx")} END,
-              (SELECT r.normalized_found_url FROM on_page_link_relationships r WHERE r.job_id = s.job_id
-                  AND r.source_page_url = s.source_page_url AND r.found_url_type = 'CANONICAL' ORDER BY r.id LIMIT 1),
-              (SELECT COALESCE(CAST(c.http_status AS TEXT), c.status_bucket) FROM on_page_link_relationships r
-                 JOIN on_page_validation_cache c ON c.job_id = r.job_id AND c.normalized_url = r.normalized_found_url
-                WHERE r.job_id = s.job_id AND r.source_page_url = s.source_page_url AND r.found_url_type = 'CANONICAL'
-                ORDER BY r.id LIMIT 1),
+              {SOURCE_STATUS_CLASS_SQL},
+              k.url, COALESCE(CAST(cc.http_status AS TEXT), cc.status_bucket),
               p.meta_robots, p.x_robots_tag, p.indexable, p.meta_description, p.meta_description_length, p.h1_text,
               p.h1_count, p.html_lang, p.word_count, p.internal_links, p.external_links, p.schema_types, p.title_length
          FROM on_page_source_pages s
          LEFT JOIN on_page_seo_pages p ON p.job_id = s.job_id AND p.source_page_url = s.source_page_url
-         LEFT JOIN (SELECT job_id, source_page_url, crawl_state AS validation_state, initial_http_status, http_status,
-                           error_type, CASE WHEN error_type LIKE '%SSRF%' THEN 'Blocked (SSRF)' ELSE '' END AS status_classification,
-                           CASE WHEN robots_status = 'DISALLOWED' OR error_type = 'ROBOTS_BLOCKED' THEN 'Robots blocked'
-                                WHEN COALESCE(waf_status, 'NONE') NOT IN ('', 'NONE') THEN 'WAF blocked'
-                                WHEN crawl_state = 'TIMED_OUT' THEN 'Timeout' ELSE '' END AS status_bucket
-                      FROM on_page_source_pages) sx ON sx.job_id = s.job_id AND sx.source_page_url = s.source_page_url
+         LEFT JOIN temp._canon k ON k.page = s.source_page_url
+         LEFT JOIN on_page_validation_cache cc ON cc.job_id = s.job_id AND cc.normalized_url = k.url
         WHERE s.job_id = ? ORDER BY s.source_page_id""", J, on_row=on_source)
 
     url_join = ("FROM on_page_link_relationships r LEFT JOIN on_page_validation_cache c "

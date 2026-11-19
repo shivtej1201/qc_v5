@@ -1144,7 +1144,15 @@ class OnPageAuditEngine:
             if wait_s > 0:
                 await asyncio.sleep(wait_s)
             if self._cooldown_gate.is_set() and epoch == self._cooldown_epoch:
-                self.metrics["primary_requests"] += 1
+                m = self.metrics
+                m["primary_requests"] += 1
+                sec = int(time.monotonic())            # measured peak: requests released in one wall-clock second
+                if sec == m.get("_peak_sec"):
+                    m["_peak_cnt"] += 1
+                else:
+                    m["_peak_sec"], m["_peak_cnt"] = sec, 1
+                if m["_peak_cnt"] > m.get("peak_primary_rps_1s", 0):
+                    m["peak_primary_rps_1s"] = m["_peak_cnt"]
                 return
 
     async def _pace_if_primary(self, url: str):
@@ -2678,6 +2686,7 @@ class OnPageAuditEngine:
             "primary_requests_paced": m["primary_requests"],
             "robots_fetches": self.robots.fetch_count,
             "achieved_primary_rps": round(m["primary_requests"] / elapsed, 2),
+            "peak_primary_rps_1s": m.get("peak_primary_rps_1s", 0),
             "target_rps_final": self.target_rps,
             "akamai_cooldowns": self.cooldown_count,
             "waf_events": m["waf_events"],

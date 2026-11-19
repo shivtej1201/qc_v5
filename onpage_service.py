@@ -250,7 +250,8 @@ class OnPageAuditService:
         return self.stop(job_id)
 
     def cancel(self, job_id: str) -> Dict[str, Any]:
-        """Stop for good. Completed work and the partial report are kept; the audit can no longer be resumed."""
+        """Stop for good. Completed work stays in the database (explorers keep working); the audit can no longer
+        be resumed and no report package is built for it."""
         meta = self._meta(job_id)
         if not meta.get("cancel_requested"):
             meta["cancel_requested"] = True
@@ -730,6 +731,103 @@ class OnPageAuditService:
                                     "size": "ic.content_length, i.id"}, order, offset, limit)
         finally:
             conn.close()
+
+    def url_detail(self, job_id: str, url: str) -> Dict[str, Any]:
+        """Everything known about one audited page, grouped for the URL Detail view (raw evidence included)."""
+        self._meta(job_id)
+        conn = self._db()
+        try:
+            cur = conn.execute("SELECT * FROM on_page_source_pages WHERE job_id = ? AND source_page_url = ?", (job_id, url))
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(url)
+            page = dict(zip([d[0] for d in cur.description], row))
+            cur = conn.execute("SELECT * FROM on_page_seo_pages WHERE job_id = ? AND source_page_url = ?", (job_id, url))
+            srow = cur.fetchone()
+            seo = dict(zip([d[0] for d in cur.description], srow)) if srow else {}
+            link_types = [dict(zip(("url_type", "scope", "relationships", "broken"), r)) for r in conn.execute(
+                """SELECT r.found_url_type, r.found_url_scope, COUNT(*),
+                          SUM(CASE WHEN c.http_status >= 400 OR c.status_bucket IN ('Timeout','DNS/Network','SSL') THEN 1 ELSE 0 END)
+                     FROM on_page_link_relationships r LEFT JOIN on_page_validation_cache c
+                       ON c.job_id = r.job_id AND c.normalized_url = r.normalized_found_url
+                    WHERE r.job_id = ? AND r.source_page_url = ? GROUP BY r.found_url_type, r.found_url_scope""", (job_id, url))]
+            crow = conn.execute(
+                """SELECT r.normalized_found_url, c.http_status, c.final_url FROM on_page_link_relationships r
+                     LEFT JOIN on_page_validation_cache c ON c.job_id = r.job_id AND c.normalized_url = r.normalized_found_url
+                    WHERE r.job_id = ? AND r.source_page_url = ? AND r.found_url_type = 'CANONICAL'
+                    ORDER BY r.normalized_found_url LIMIT 1""", (job_id, url)).fetchone()
+            canonical = ({"url": crow[0], "status": crow[1], "final_url": crow[2],
+                          "self_referencing": crow[0] in (page.get("normalized_source_url"), page.get("final_url"))}
+                         if crow else None)
+            img = conn.execute(
+                """SELECT COUNT(*), SUM(CASE WHEN i.alt_present = 0 THEN 1 ELSE 0 END),
+                          SUM(CASE WHEN ic.http_status >= 400 OR COALESCE(ic.image_issue, '') != '' THEN 1 ELSE 0 END)
+                     FROM on_page_image_relationships i LEFT JOIN on_page_image_validation_cache ic
+                       ON ic.job_id = i.job_id AND ic.normalized_url = i.normalized_image_url
+                    WHERE i.job_id = ? AND i.source_page_url = ?""", (job_id, url)).fetchone()
+        finally:
+            conn.close()
+        try:
+            chain = json.loads(page.get("redirect_chain") or "[]")
+        except ValueError:
+            chain = []
+        try:
+            hreflang = json.loads(seo.get("hreflang_json") or "[]")
+        except ValueError:
+            hreflang = []
+        issues = self.issues_db(job_id, page_url=url, limit=500)["items"]
+        return {
+            "url": url,
+            "overview": {k: page.get(k) for k in ("source_page_id", "crawl_state", "business", "page_type", "language",
+                                                  "source_sitemap", "checked_at", "classification_method")},
+            "http": {k: page.get(k) for k in ("initial_http_status", "http_status", "final_url", "content_type",
+                                              "error_type", "error_message", "robots_status", "waf_status", "attempts")},
+            "redirect": {"count": page.get("redirect_count"), "chain": chain, "final_url": page.get("final_url")},
+            "canonical": canonical,
+            "robots": {"meta_robots": seo.get("meta_robots"), "x_robots_tag": seo.get("x_robots_tag"),
+                       "indexable": seo.get("indexable"), "noindex": seo.get("noindex"), "nofollow": seo.get("nofollow")},
+            "metadata": {k: seo.get(k) for k in ("title", "title_length", "title_count", "meta_description",
+                                                 "meta_description_length", "html_lang", "has_viewport", "has_charset",
+                                                 "og_title", "og_description", "og_image", "twitter_card", "meta_refresh")},
+            "headings": {k: seo.get(k) for k in ("h1_count", "h1_text", "h2_count", "heading_skips")},
+            "hreflang": hreflang,
+            "structured_data": {"blocks": seo.get("jsonld_blocks"), "invalid": seo.get("jsonld_invalid"),
+                                "types": seo.get("schema_types")},
+            "content": {k: seo.get(k) for k in ("word_count", "content_hash", "js_rendering_suspected", "script_count")},
+            "performance": {"response_time_ms": page.get("response_time_ms"), "html_bytes": page.get("html_bytes"),
+                            "html_truncated": page.get("html_truncated")},
+            "security": {"insecure_resources": seo.get("insecure_resources"), "examples": seo.get("insecure_examples")},
+            "links": {"by_type": link_types, "relationships": page.get("relationships_count"),
+                      "raw_occurrences": page.get("raw_occurrences_count")},
+            "images": {"placements": img[0] or 0, "missing_alt": img[1] or 0, "broken": img[2] or 0},
+            "issues": issues,
+            "raw": {"source_page": page, "seo": seo},
+        }
+
+    def issue_detail(self, job_id: str, key: str) -> Dict[str, Any]:
+        if not re.match(r"^[a-f0-9]{20}$", key or ""):
+            raise ValueError("invalid issue key")
+        self._meta(job_id)
+        conn = self._db()
+        try:
+            cur = conn.execute(
+                """SELECT i.*, COALESCE(st.status, 'OPEN') AS status, COALESCE(st.note, '') AS status_note,
+                          st.updated_at AS status_updated_at, st.last_job_id AS status_job_id
+                     FROM on_page_issues i LEFT JOIN on_page_issue_status st
+                       ON st.project_id = ? AND st.issue_key = i.issue_key
+                    WHERE i.job_id = ? AND i.issue_key = ?""", (self._project(job_id), job_id, key))
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(key)
+            it = dict(zip([d[0] for d in cur.description], row))
+        finally:
+            conn.close()
+        from on_page_issue_rules import action_for
+        it["recommended_action"] = action_for(it["rule_code"], it["category"])
+        it["evidence"] = {k: it.get(k) for k in ("element_type", "found_url", "subject_url", "anchor_or_alt_text",
+                                                 "location", "http_status", "initial_status", "final_url", "hop_count",
+                                                 "detail", "validation_source")}
+        return it
 
     def issues(self, job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
                category: Optional[str] = None, search: Optional[str] = None, offset: int = 0,

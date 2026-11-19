@@ -58,7 +58,9 @@ Design decisions:
 | `on_page_issue_rules.py` | ~100 issue types → severity, detail, recommended action (pure functions) |
 | `seo_audit.py` | SEO page facts from the single parse (+ `X-Robots-Tag`), single-page SEO rules, hreflang reciprocity, lastmod rules |
 | `sitemap_config.py` | Sitemap discovery (sitemap / robots.txt / domain), import snapshots, selection filters, saved profiles; uses `sitemap_extractor.py` (SSRF per hop, robots, gzip, nested indexes) |
-| `on_page_csv_packager.py` | Streaming reports 01–16 (incl. cross-page SEO checks and per-sitemap health), ZIP, 31-check trust gate |
+| `on_page_csv_packager.py` | Streaming reports 00–17 (incl. cross-page SEO checks, per-sitemap health, input exceptions, manifest), ZIP with SHA-256 verification, trust gate |
+| `issue_store.py` | Persisted issues (unique per page + rule + subject), project-level issue lifecycle, deterministic health score |
+| `remediation_engine.py` | Remediation items from classic audits **and** on-page issues (grouped per destination / page / site-wide) |
 | `on_page_schema.py` | Dependency-free image-audit DDL shared by API and worker |
 | `request_errors.py` | Type-based transport error classification shared by checker + engine |
 | `url_normalizer.py` | Normalization (cache key), syntax validation, SSRF checks (DNS/private-IP aware) |
@@ -81,6 +83,12 @@ Design decisions:
   robots.txt) reserves a slot on one strict-spacing clock. `--host-budget` gives other hosts (e.g. image CDN) their own.
 * **Adaptive control**: +0.25 req/s per 2,000 healthy responses up to `max_rps`; 5 consecutive WAF responses → 15%
   step-down + cooldown + probe; budgets are independent per host.
+* **All URLs on the page** are extracted and typed: navigation (`<a>`, `<area>`, `<iframe>`, `<embed>`, meta refresh),
+  SEO signals (canonical, hreflang, prev/next/amphtml, `og:url`, JSON-LD URLs), resources (`<script>`, stylesheets,
+  icons/preload/manifest, CSS `url()`, `<video>`/`<audio>`/`<source>`/`<track>`) and forms (recorded, never requested:
+  a GET on a form endpoint is not a valid check). Images also come from CSS backgrounds, video posters and JSON-LD.
+* **Retries**: transient failures only (timeouts, connection errors, 429, 502–504), exponential backoff with jitter
+  (0.5 s, 1 s, 2 s … ≤ 8 s), `Retry-After` honored up to 30 s; 4xx, robots and SSRF blocks are never retried.
 * **Three-level dedup** (same page, across pages, in flight) for URLs and images; a sitemap page that is also a link
   target is satisfied by its own fetch (`SOURCE_PAGE_REUSED`). Only authoritative non-WAF HTTP results are reused.
 * **Exactness**: counters are mirrored from what each transaction writes; full aggregation only at start,
@@ -101,6 +109,10 @@ Design decisions:
 | `on_page_seo_pages` | one row per parsed 2xx HTML sitemap page: SEO facts (written in the page's transaction) | `(job_id, source_page_url)` |
 | `on_page_sitemap_entries` | sitemap provenance per page URL (sitemap, lastmod, changefreq, priority) | `(job_id, normalized_url)` |
 | `on_page_sitemap_sources` | every sitemap file fetched for the audit (kind, status, URLs, duplicates, size, selected) | `(job_id, sitemap_url)` |
+| `on_page_input_exceptions` | input lines that are not pages (invalid, exact or normalized duplicate) | `(job_id, line_no)` |
+| `on_page_issues` | one row per issue: rule, severity, category, score dimension, page, subject URL, evidence | `(job_id, issue_key)` UNIQUE |
+| `on_page_issue_status` | lifecycle per project (primary domain): OPEN / IN_PROGRESS / VERIFIED / RESOLVED / DISMISSED | `(project_id, issue_key)` |
+| `on_page_scores` | health score per audit + the five dimension scores, `formula_version`, weights | `job_id` |
 | `job_url_items` | bulk URL-status: one row per submitted URL | `(job_id, row_no)` |
 
 ## 6. Dashboard API (`/api/on-page/…`)
@@ -120,7 +132,46 @@ Design decisions:
 | `POST audits` with `sitemap: {import_id, selected_sitemaps, include, exclude, max_pages}` | Start an audit from a sitemap selection (sitemap provenance flows into the reports) |
 | `GET/POST sitemap-profiles` · `PUT/DELETE sitemap-profiles/{id}` · `POST sitemap-profiles/{id}/run` | Saved sitemap configurations; *run* re-discovers and launches |
 
-Errors: 400 invalid input/ids, 404 unknown audit or report not built, 409 domain busy / already running.
+| `POST audits/{id}/pause` · `POST audits/{id}/cancel` · `GET audits/{id}/progress` | Lifecycle control; progress (total, processed, remaining, success, failed, blocked, links, images, issues, current + average throughput, elapsed, ETA) — all from the backend |
+| `GET audits/{id}/score` | Health score, five dimensions, `formula_version`, weights, `calculated_at` |
+| `PATCH audits/{id}/issues/{issue_key}/status` `{status, note}` | Issue lifecycle (persists per project across audits) |
+| `GET audits/{id}/urls` · `links` · `images` | Server-side explorers: filters, whitelisted sort, `limit` ≤ 500 + `offset`, total `matched` |
+| `GET audits/{id}/issues?...&status=&page_url=&sort=&order=` | Issues from the database (indexed) with lifecycle status |
+| `POST /api/jobs/{id}/remediations/generate` (existing) | Also turns on-page issues into remediation items |
+
+Errors: 400 invalid input/ids/sort/limit, 404 unknown audit or report not built, 409 domain busy / already running /
+cancelled audit resumed.
+
+## 6b. Job lifecycle
+
+```
+CREATED -> QUEUED -> RUNNING -> PAUSING -> PAUSED -> (resume) RESUMED/RUNNING -> COMPLETED | PARTIAL | FAILED
+                        \-> CANCELLING -> CANCELLED (not resumable; completed work stays in the DB)
+            worker crash -> INTERRUPTED (resume continues from the checkpoint)
+```
+
+The state is derived from the worker process, its `result.json` and the audit metadata, and every transition is
+appended to an event history (`events` in `GET audits/{id}`). Pause and cancel are graceful: in-flight requests finish
+and are committed. Recovery: completed pages and validations are never re-requested; PENDING pages and validations
+continue on resume (verified with a SIGKILL in `test_platform_pipeline.py`).
+
+## 6c. Issues, lifecycle and score
+
+* Issues are written to `on_page_issues` with `INSERT OR IGNORE` on `issue_key = hash(page | rule | subject)`, then
+  12/13/14 are streamed from the table, so CSV and DB always agree and rebuilding a package never duplicates issues.
+* Lifecycle is per project (primary domain): a status survives re-audits. After a complete audit, an OPEN or
+  IN_PROGRESS issue whose page was audited and that is no longer detected becomes VERIFIED; a VERIFIED or RESOLVED
+  issue that is detected again is re-opened with a "Regression" note. Only an audit other than the one the status was
+  set in can move it.
+* Health score `qcv5-health-1.0`: each audited page gets a penalty per dimension = min(1, Σ severity weights)
+  (HIGH 1.0, MEDIUM 0.5, LOW 0.2, INFO 0); dimension score = 100 × (1 − mean penalty); overall = 35 % technical +
+  25 % links + 20 % content + 10 % performance + 10 % security. Same rows → same score.
+
+## 6d. Observability
+
+`<out-dir>/events.jsonl`: one JSON object per stage (`inventory`, `sitemap`, `crawl`, `export`) with job id, project
+id, counts, rates and durations; failed trust-gate checks are listed in the `export` event. Per-URL errors are stored
+on the URL's row (`error_type`, `error_message`, `status_class`) and appear in 03/04/05/06.
 
 ## 6a. SEO and sitemap audit
 

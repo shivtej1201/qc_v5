@@ -1,0 +1,794 @@
+{
+  "config": {
+    "sources": 10000,
+    "rps": 16.0,
+    "max_rps": 18.0,
+    "sc": 35,
+    "dc": 35,
+    "ic": 50,
+    "per_host": 30,
+    "latency_ms": 300.0,
+    "cdn_latency_ms": 80.0,
+    "waf_rps": 15.0,
+    "waf_conc": 32,
+    "origin_knee": 24,
+    "waf_block": 20.0,
+    "images_on_primary": false,
+    "cdn_budget": "",
+    "cdn_waf_rps": 0.0,
+    "port": 8831,
+    "keep": "",
+    "keep_dir": "",
+    "out": "/home/user/qc_v5/bench/results/b1_10k_enterprise150k_preset_akamai_model.json"
+  },
+  "total_seconds_incl_package": 1319.9,
+  "crawl_seconds": 781.3,
+  "package_seconds": 538.4,
+  "final_qc_status": "PASS",
+  "performance": {
+    "elapsed_sec": 781.3,
+    "source_fetches": 10004,
+    "source_pages_per_sec": 12.8,
+    "dest_validations_http": 631,
+    "dest_validations_per_sec": 0.81,
+    "source_seeded_validations": 10000,
+    "dest_skipped_already_validated": 0,
+    "relationships_persisted_this_run": 369522,
+    "http_requests_total": 70983,
+    "primary_requests_paced": 10741,
+    "robots_fetches": 3,
+    "achieved_primary_rps": 13.77,
+    "target_rps_final": 14.85,
+    "akamai_cooldowns": 1,
+    "waf_events": 9,
+    "status_403": 9,
+    "status_429": 0,
+    "timeouts": 0,
+    "network_errors": 0,
+    "latency_avg_ms": 129.1,
+    "latency_p95_ms": 353.5,
+    "db_flushes": 711,
+    "db_rows_written": 782342,
+    "db_writes_per_sec": 1002.7,
+    "db_flush_avg_ms": 61.83,
+    "db_flush_p95_ms": 143.74,
+    "write_q_peak": 40,
+    "dest_q_peak": 107,
+    "parse_q_peak": 2,
+    "rss_peak_mb": 225.9,
+    "cpu_avg_pct": 31.9,
+    "cpu_peak_pct": 47.2,
+    "reconciliations": 0,
+    "reconciliation_mismatches": 0,
+    "rps_history": [
+      [
+        9.9,
+        16.0,
+        13.6,
+        "cooldown"
+      ],
+      [
+        179.8,
+        13.6,
+        13.85,
+        "increase"
+      ],
+      [
+        324.2,
+        13.85,
+        14.1,
+        "increase"
+      ],
+      [
+        466.2,
+        14.1,
+        14.35,
+        "increase"
+      ],
+      [
+        605.6,
+        14.35,
+        14.6,
+        "increase"
+      ],
+      [
+        742.6,
+        14.6,
+        14.85,
+        "increase"
+      ]
+    ],
+    "image_validations_http": 60319,
+    "image_validations_per_sec": 77.2,
+    "image_skipped_already_validated": 0,
+    "requests_by_kind": {
+      "probe": 2,
+      "robots": 3,
+      "source": 10004,
+      "image": 60319,
+      "url": 658
+    },
+    "primary_requests_by_kind": {
+      "robots": 1,
+      "source": 10004,
+      "url": 632,
+      "image": 104
+    },
+    "request_rate_by_kind": {
+      "probe": 0.0,
+      "robots": 0.0,
+      "source": 12.82,
+      "image": 77.31,
+      "url": 0.84
+    },
+    "robots_blocked": 0,
+    "host_budgets": {},
+    "total_requests_per_sec": 90.85,
+    "url_validations_per_sec": 0.81,
+    "primary_requests_per_sec": 13.77,
+    "cooldowns": 1
+  },
+  "stats": {
+    "job_id": "BENCH10K",
+    "status": "COMPLETED",
+    "source_pages_total": 10000,
+    "source_pages_processed": 10000,
+    "source_pages_pending": 0,
+    "source_pages_completed": 10000,
+    "source_pages_failed": 0,
+    "source_pages_blocked": 0,
+    "source_pages_timed_out": 0,
+    "source_pages_explicitly_excluded": 0,
+    "url_occurrences_extracted": 410000,
+    "url_relationships_discovered": 369522,
+    "url_relationships_persisted": 369522,
+    "unique_destination_urls": 10626,
+    "unique_http_destinations": 10626,
+    "unique_http_destinations_validated": 10626,
+    "unique_http_destinations_failed": 0,
+    "unique_http_destinations_blocked": 0,
+    "unique_http_destinations_timed_out": 0,
+    "unique_http_destinations_excluded": 0,
+    "new_http_validations": 10626,
+    "reused_http_validations": 358896,
+    "image_occurrences_extracted": 300304,
+    "image_relationships_persisted": 250304,
+    "image_http_relationships": 240304,
+    "new_image_validations": 60319,
+    "reused_image_validations": 179985,
+    "unique_image_urls": 60319,
+    "unique_images_validated": 60319,
+    "unique_images_failed": 0,
+    "unique_images_blocked": 0,
+    "unique_images_timed_out": 0,
+    "unique_images_pending": 0,
+    "image_skipped_relationships": 10000,
+    "updated_at": "2026-11-19T20:12:30.138056Z",
+    "counter_reconciliation": {
+      "passed": true,
+      "diffs": {}
+    },
+    "performance": {
+      "elapsed_sec": 780.2,
+      "source_fetches": 10004,
+      "source_pages_per_sec": 12.82,
+      "dest_validations_http": 631,
+      "dest_validations_per_sec": 0.81,
+      "source_seeded_validations": 10000,
+      "dest_skipped_already_validated": 0,
+      "relationships_persisted_this_run": 369522,
+      "http_requests_total": 70983,
+      "primary_requests_paced": 10741,
+      "robots_fetches": 3,
+      "achieved_primary_rps": 13.77,
+      "target_rps_final": 14.85,
+      "akamai_cooldowns": 1,
+      "waf_events": 9,
+      "status_403": 9,
+      "status_429": 0,
+      "timeouts": 0,
+      "network_errors": 0,
+      "latency_avg_ms": 129.1,
+      "latency_p95_ms": 353.5,
+      "db_flushes": 711,
+      "db_rows_written": 782342,
+      "db_writes_per_sec": 1002.7,
+      "db_flush_avg_ms": 61.83,
+      "db_flush_p95_ms": 143.74,
+      "write_q_peak": 40,
+      "dest_q_peak": 107,
+      "parse_q_peak": 2,
+      "rss_peak_mb": 225.8,
+      "cpu_avg_pct": 32.4,
+      "cpu_peak_pct": 47.2,
+      "reconciliations": 0,
+      "reconciliation_mismatches": 0,
+      "rps_history": [
+        [
+          9.9,
+          16.0,
+          13.6,
+          "cooldown"
+        ],
+        [
+          179.8,
+          13.6,
+          13.85,
+          "increase"
+        ],
+        [
+          324.2,
+          13.85,
+          14.1,
+          "increase"
+        ],
+        [
+          466.2,
+          14.1,
+          14.35,
+          "increase"
+        ],
+        [
+          605.6,
+          14.35,
+          14.6,
+          "increase"
+        ],
+        [
+          742.6,
+          14.6,
+          14.85,
+          "increase"
+        ]
+      ],
+      "image_validations_http": 60319,
+      "image_validations_per_sec": 77.31,
+      "image_skipped_already_validated": 0,
+      "requests_by_kind": {
+        "probe": 2,
+        "robots": 3,
+        "source": 10004,
+        "image": 60319,
+        "url": 658
+      },
+      "primary_requests_by_kind": {
+        "robots": 1,
+        "source": 10004,
+        "url": 632,
+        "image": 104
+      },
+      "request_rate_by_kind": {
+        "probe": 0.0,
+        "robots": 0.0,
+        "source": 12.82,
+        "image": 77.31,
+        "url": 0.84
+      },
+      "robots_blocked": 0,
+      "host_budgets": {}
+    }
+  },
+  "package": {
+    "manifest": [
+      {
+        "filename": "01_summary.csv",
+        "dataset": "Run summary, totals, score, reconciliation status",
+        "row_count": 65,
+        "expected_rows": 65,
+        "columns": 2,
+        "file_size": 1689,
+        "sha256": "ad2341cfed7604374291875e18fdb7caaabbf6edf71b359fe44b8e0cede1f093",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "02_source_page_audit.csv",
+        "dataset": "URL audit: one row per sitemap/source page",
+        "row_count": 10000,
+        "expected_rows": 10000,
+        "columns": 46,
+        "file_size": 3612991,
+        "sha256": "a101c92f25f4f99642ac7582fbbb0badfa9fc59b460622b2f5042df3c4612f38",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "03_url_audit.csv",
+        "dataset": "Link audit: one row per page -> URL relationship (links, SEO signals, resources, forms)",
+        "row_count": 369522,
+        "expected_rows": 369522,
+        "columns": 32,
+        "file_size": 132741907,
+        "sha256": "772da8f81e172dfc413e712c3c1e9c5028805dd7fb0b57af16d4e345d3543569",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "04_unique_url_validation.csv",
+        "dataset": "One row per unique URL validated",
+        "row_count": 10626,
+        "expected_rows": 10626,
+        "columns": 16,
+        "file_size": 2250550,
+        "sha256": "bed60bf4a98e1e7f19e2ae0956452c383b7413903575670d2038d04962911fec",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "05_image_audit.csv",
+        "dataset": "Image audit: one row per page -> image placement",
+        "row_count": 250304,
+        "expected_rows": 250304,
+        "columns": 35,
+        "file_size": 101722508,
+        "sha256": "9b21d9945b4ae4a320420a841baf1d7195fffe5ae93e6a4b46e8bc04d384d2e9",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "06_unique_image_validation.csv",
+        "dataset": "One row per unique image validated",
+        "row_count": 60319,
+        "expected_rows": 60319,
+        "columns": 19,
+        "file_size": 14590784,
+        "sha256": "ab31d7b5a7cef1e4fa91d2d89109d6e4bc6487ffa6b0e0fa0cda7695b1d9d211",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "07_broken_urls.csv",
+        "dataset": "Broken URL relationships",
+        "row_count": 397,
+        "expected_rows": 397,
+        "columns": 9,
+        "file_size": 62217,
+        "sha256": "1ee42821406dda8a164a859ad173257ad95bf75f45f2d05af70a4f4b5659fa33",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "08_redirect_urls.csv",
+        "dataset": "Redirecting URL relationships",
+        "row_count": 499,
+        "expected_rows": 499,
+        "columns": 9,
+        "file_size": 86415,
+        "sha256": "21be32e1daf346197e58462fba4181f6d9c0b30d65350a34f83e045dde84b166",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "09_broken_images.csv",
+        "dataset": "Broken image placements",
+        "row_count": 304,
+        "expected_rows": 304,
+        "columns": 11,
+        "file_size": 81457,
+        "sha256": "6dd63e65f4c83db865eeeffd579bb1481d2ed68762bc4946e66d5f81338e2b88",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "10_external_urls.csv",
+        "dataset": "External URL relationships",
+        "row_count": 20000,
+        "expected_rows": 20000,
+        "columns": 10,
+        "file_size": 3296085,
+        "sha256": "566e7c73a5f0fe5813948e2bd2e18c1ef782ba98ee82cb3f1f660f9ae385799c",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "11_reconciliation.csv",
+        "dataset": "Trust-gate checks (expected vs actual)",
+        "row_count": 35,
+        "expected_rows": 35,
+        "columns": 4,
+        "file_size": 1980,
+        "sha256": "7626882fbd3f23fa570265de924d3e6cbe428c16f3a873d1ad137c5baec6063a",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "12_issues.csv",
+        "dataset": "Issues (one per page + rule + subject) with severity, fix and lifecycle status",
+        "row_count": 71878,
+        "expected_rows": 71878,
+        "columns": 20,
+        "file_size": 26413283,
+        "sha256": "e1cb3efbdfd1de9a2c13edeb114869bab8057c9e5118c4b9592f163ead967236",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "13_issue_summary.csv",
+        "dataset": "Issues per type",
+        "row_count": 13,
+        "expected_rows": 13,
+        "columns": 9,
+        "file_size": 2790,
+        "sha256": "6a94ed7a39bb2f5738fdeeb41fceb76c959057f829fd8810c1f210f6937bbd10",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "14_page_issue_summary.csv",
+        "dataset": "Issues per page, worst first",
+        "row_count": 10000,
+        "expected_rows": 10000,
+        "columns": 7,
+        "file_size": 1583889,
+        "sha256": "f9bb21e5c1e67c86869257b8ae41e3e093d4aa8e97cc9d0b86caf4643727f6a6",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "15_seo_page_audit.csv",
+        "dataset": "SEO facts per 2xx HTML page",
+        "row_count": 10000,
+        "expected_rows": 10000,
+        "columns": 44,
+        "file_size": 2545046,
+        "sha256": "23fa41ecdee12a80ea1a30e476bede6c57697f5be5d270e831ccaf4f1072a7a8",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "16_sitemap_audit.csv",
+        "dataset": "Health per sitemap file",
+        "row_count": 1,
+        "expected_rows": 1,
+        "columns": 29,
+        "file_size": 478,
+        "sha256": "ad01812af5294e15bfa3572e40449c0882cfcc1c088fc065db6199124bd2a943",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      },
+      {
+        "filename": "17_input_exceptions.csv",
+        "dataset": "Input URLs not crawled as pages (invalid or duplicate) with the reason",
+        "row_count": 0,
+        "expected_rows": 0,
+        "columns": 5,
+        "file_size": 54,
+        "sha256": "3b2702dafef6a80ef74d4da42e5d14d74700f770ed1b652e3754d5a8ca30bb9f",
+        "generated_at": "2026-11-19T20:21:26.960057Z",
+        "status": "OK"
+      }
+    ],
+    "zip_checksums_verified": true,
+    "csv_seconds": 530.47,
+    "zip_seconds": 1.44,
+    "score": {
+      "job_id": "BENCH10K",
+      "project_id": "127.0.0.1",
+      "score": 53.56,
+      "technical": 30.0,
+      "links": 92.23,
+      "content": 0.0,
+      "performance": 100.0,
+      "security": 100.0,
+      "pages_scored": 10000,
+      "formula_version": "qcv5-health-1.0",
+      "weights": {
+        "technical": 0.35,
+        "links": 0.25,
+        "content": 0.2,
+        "performance": 0.1,
+        "security": 0.1
+      },
+      "calculated_at": "2026-11-19T20:21:21.048547Z"
+    },
+    "issue_lifecycle": {
+      "reopened": 0,
+      "verified": 0
+    },
+    "zip_path": "/tmp/qc_10k_7a0rfa9j/out/QC_V5_10K_AUDIT.zip",
+    "zip_verified": true,
+    "zip_bytes": 13904944,
+    "csv_bytes": 288997249,
+    "files": {
+      "02_source_page_audit.csv": 10000,
+      "03_url_audit.csv": 369522,
+      "04_unique_url_validation.csv": 10626,
+      "05_image_audit.csv": 250304,
+      "06_unique_image_validation.csv": 60319,
+      "07_broken_urls.csv": 397,
+      "08_redirect_urls.csv": 499,
+      "09_broken_images.csv": 304,
+      "10_external_urls.csv": 20000,
+      "15_seo_page_audit.csv": 10000,
+      "16_sitemap_audit.csv": 1,
+      "12_issues.csv": 71878,
+      "13_issue_summary.csv": 13,
+      "14_page_issue_summary.csv": 10000,
+      "17_input_exceptions.csv": 0,
+      "11_reconciliation.csv": 35,
+      "01_summary.csv": 65,
+      "00_manifest.csv": 17
+    },
+    "work_dir": "/tmp/qc_10k_7a0rfa9j/out/QC_V5_10K_AUDIT",
+    "reconciliation": [
+      {
+        "check": "every_source_page_has_terminal_state",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "every_http_url_has_terminal_validation_state",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "every_image_url_has_terminal_validation_state",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "url_http_relationships_eq_new_plus_reused_plus_not_requested",
+        "expected": 369522,
+        "actual": 369522,
+        "status": "PASS"
+      },
+      {
+        "check": "unique_http_urls_eq_new_url_validations",
+        "expected": 10626,
+        "actual": 10626,
+        "status": "PASS"
+      },
+      {
+        "check": "unique_http_urls_eq_unique_url_validation_csv_rows",
+        "expected": 10626,
+        "actual": 10626,
+        "status": "PASS"
+      },
+      {
+        "check": "image_http_relationships_eq_new_plus_reused",
+        "expected": 240304,
+        "actual": 240304,
+        "status": "PASS"
+      },
+      {
+        "check": "unique_image_urls_eq_new_image_validations",
+        "expected": 60319,
+        "actual": 60319,
+        "status": "PASS"
+      },
+      {
+        "check": "unique_image_urls_eq_unique_image_csv_rows",
+        "expected": 60319,
+        "actual": 60319,
+        "status": "PASS"
+      },
+      {
+        "check": "every_relationship_has_source_and_destination",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "every_relationship_source_is_a_source_page",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "every_reused_url_result_points_to_real_validation",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "every_reused_image_result_points_to_real_validation",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "url_csv_rows_eq_db_relationships",
+        "expected": 369522,
+        "actual": 369522,
+        "status": "PASS"
+      },
+      {
+        "check": "image_csv_rows_eq_db_relationships",
+        "expected": 250304,
+        "actual": 250304,
+        "status": "PASS"
+      },
+      {
+        "check": "source_csv_rows_eq_db_source_pages",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "broken_url_csv_rows_eq_db",
+        "expected": 397,
+        "actual": 397,
+        "status": "PASS"
+      },
+      {
+        "check": "redirect_csv_rows_eq_db",
+        "expected": 499,
+        "actual": 499,
+        "status": "PASS"
+      },
+      {
+        "check": "broken_image_csv_rows_eq_db",
+        "expected": 304,
+        "actual": 304,
+        "status": "PASS"
+      },
+      {
+        "check": "external_csv_rows_eq_db",
+        "expected": 20000,
+        "actual": 20000,
+        "status": "PASS"
+      },
+      {
+        "check": "job_progress_row_eq_db_url_relationships",
+        "expected": 369522,
+        "actual": 369522,
+        "status": "PASS"
+      },
+      {
+        "check": "job_progress_row_eq_db_image_relationships",
+        "expected": 250304,
+        "actual": 250304,
+        "status": "PASS"
+      },
+      {
+        "check": "job_progress_row_eq_db_unique_images",
+        "expected": 60319,
+        "actual": 60319,
+        "status": "PASS"
+      },
+      {
+        "check": "issue_rows_eq_issue_summary_total",
+        "expected": 71878,
+        "actual": 71878,
+        "status": "PASS"
+      },
+      {
+        "check": "issue_rows_eq_page_issue_summary_total",
+        "expected": 71878,
+        "actual": 71878,
+        "status": "PASS"
+      },
+      {
+        "check": "broken_link_issues_eq_broken_url_csv_rows",
+        "expected": 397,
+        "actual": 397,
+        "status": "PASS"
+      },
+      {
+        "check": "broken_image_issues_eq_broken_image_csv_rows",
+        "expected": 304,
+        "actual": 304,
+        "status": "PASS"
+      },
+      {
+        "check": "seo_csv_rows_eq_db_seo_pages",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "every_parsed_2xx_html_page_has_seo_row",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "sitemap_csv_pages_eq_source_pages",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "source_pages_eq_completed_failed_blocked_timedout_excluded_pending",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "input_urls_eq_source_pages_plus_input_exceptions",
+        "expected": 10000,
+        "actual": 10000,
+        "status": "PASS"
+      },
+      {
+        "check": "issue_csv_rows_eq_db_issues",
+        "expected": 71878,
+        "actual": 71878,
+        "status": "PASS"
+      },
+      {
+        "check": "csv_files_rows_columns_encoding_valid",
+        "expected": 0,
+        "actual": 0,
+        "status": "PASS"
+      },
+      {
+        "check": "database_integrity",
+        "expected": "ok",
+        "actual": "ok",
+        "status": "PASS"
+      }
+    ],
+    "reconciliation_status": "PASS",
+    "database_integrity": "ok",
+    "final_qc_status": "PASS",
+    "build_seconds": 538.43
+  },
+  "server": {
+    "kind": {
+      "robots": 5,
+      "source_page": 10015,
+      "cdn_image": 60215,
+      "external": 26,
+      "extra_dest": 612,
+      "primary_image": 104,
+      "waf_403": 9
+    },
+    "total": 70986,
+    "max_primary_req_in_1s": 17,
+    "waf_403_served": 9,
+    "waf_blocks": 1,
+    "max_primary_inflight": 9,
+    "concurrency_blocks": 0,
+    "cdn_waf_blocks": 0,
+    "max_cdn_req_in_1s": 121,
+    "duplicate_paths": 35,
+    "duplicate_examples": [
+      [
+        "P/p/0",
+        2
+      ],
+      [
+        "P/p/40",
+        2
+      ],
+      [
+        "P/p/480",
+        2
+      ],
+      [
+        "P/d/401",
+        2
+      ],
+      [
+        "P/p/80",
+        2
+      ],
+      [
+        "P/p/85",
+        2
+      ],
+      [
+        "P/d/156",
+        2
+      ],
+      [
+        "P/d/452",
+        2
+      ],
+      [
+        "P/d/201",
+        3
+      ],
+      [
+        "P/p/86",
+        2
+      ]
+    ],
+    "primary_first_ts": 1342.567647511,
+    "primary_last_ts": 2122.241868216
+  }
+}

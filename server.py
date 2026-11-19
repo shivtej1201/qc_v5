@@ -694,6 +694,13 @@ async def onpage_score(job_id: str):
         raise
 
 
+@app.get("/api/on-page/audits/{job_id}/url-detail")
+async def onpage_url_detail(job_id: str, url: str):
+    if not url or len(url) > 4000:
+        raise HTTPException(400, "url is required (<= 4000 characters)")
+    return await asyncio.to_thread(_onpage_call, onpage.url_detail, job_id, url)
+
+
 @app.patch("/api/on-page/audits/{job_id}/issues/{issue_key}/status")
 async def onpage_issue_status(job_id: str, issue_key: str, body: OnPageIssueStatus):
     return _onpage_call(onpage.set_issue_status, job_id, issue_key, body.status, body.note)
@@ -761,6 +768,11 @@ async def onpage_issues(job_id: str, severity: Optional[str] = None, issue_type:
         return await asyncio.to_thread(_onpage_call, onpage.issues_db, job_id, severity, issue_type, category, status,
                                        q, page_url, sort, order, offset, limit)
     return await asyncio.to_thread(_onpage_call, onpage.issues, job_id, severity, issue_type, category, q, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/issues/{issue_key}")
+async def onpage_issue_detail(job_id: str, issue_key: str):
+    return await asyncio.to_thread(_onpage_call, onpage.issue_detail, job_id, issue_key)
 
 
 @app.get("/api/on-page/audits/{job_id}/pages")

@@ -239,6 +239,21 @@ def test_full_pipeline_on_fixture_site(env):
             missing = [i for i in nf["items"] if i["normalized_url"].endswith("/missing")]
             assert len(missing) == 1 and missing[0]["status"] == "OPEN"
 
+            # issue detail + URL detail (evidence for the detail views)
+            det = (await c.get(f"/api/on-page/audits/{jid}/issues/{missing[0]['issue_key']}")).json()
+            assert det["evidence"]["http_status"] == 404 and det["evidence"]["subject_url"].endswith("/missing")
+            assert "404" in det["recommended_action"] and det["status"] == "OPEN"
+            assert (await c.get(f"/api/on-page/audits/{jid}/issues/overview")).json()["total"] > 0   # not shadowed
+            ud = (await c.get(f"/api/on-page/audits/{jid}/url-detail", params={"url": site.base + "/p/ok"})).json()
+            assert ud["http"]["http_status"] == 200 and ud["canonical"]["self_referencing"] is True
+            assert ud["metadata"]["title"].startswith("Home page") and ud["headings"]["h1_count"] == 1
+            assert ud["structured_data"]["types"].startswith("Organization") and len(ud["hreflang"]) == 3
+            assert ud["images"]["missing_alt"] >= 1 and any(t["url_type"] == "SCRIPT" for t in ud["links"]["by_type"])
+            assert ud["issues"] and all(i["source_page_url"] == site.base + "/p/ok" for i in ud["issues"])
+            red = (await c.get(f"/api/on-page/audits/{jid}/url-detail", params={"url": site.base + "/p/redirected"})).json()
+            assert red["redirect"]["count"] == 1 and red["redirect"]["chain"]
+            assert (await c.get(f"/api/on-page/audits/{jid}/url-detail", params={"url": "http://nope/"})).status_code == 404
+
             # lifecycle of one issue: mark /missing IN_PROGRESS and the 403 issue RESOLVED
             assert (await c.patch(f"/api/on-page/audits/{jid}/issues/{missing[0]['issue_key']}/status",
                                   json={"status": "IN_PROGRESS", "note": "ticket SEO-1"})).status_code == 200
