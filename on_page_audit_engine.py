@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import random
 import re
 import sqlite3
 import time
@@ -37,7 +38,42 @@ TYPE_PRIORITY = {
     "AREA": 4,
     "IFRAME": 5,
     "LINK_META": 6,
+    "META_REFRESH": 7,
+    "SCRIPT": 8,
+    "STYLESHEET": 9,
+    "LINK_RESOURCE": 10,
+    "CSS_RESOURCE": 11,
+    "MEDIA": 12,
+    "EMBED": 13,
+    "SOCIAL_URL": 14,
+    "JSONLD_URL": 15,
+    "FORM": 16,
 }
+# URL categories that are recorded but never requested: a GET on a form endpoint is not a valid check
+# (it may have side effects or answer 405 for a working POST target).
+NOT_REQUESTED_TYPES = frozenset({"FORM"})
+# URL category groups used by reports and the link/resource split
+NAVIGATION_TYPES = frozenset({"ANCHOR", "AREA", "IFRAME", "META_REFRESH", "EMBED"})
+SEO_SIGNAL_TYPES = frozenset({"CANONICAL", "HREFLANG", "LINK_META", "SOCIAL_URL", "JSONLD_URL"})
+RESOURCE_TYPES = frozenset({"SCRIPT", "STYLESHEET", "LINK_RESOURCE", "CSS_RESOURCE", "MEDIA"})
+
+
+RETRY_BASE_SEC = 0.5
+RETRY_CAP_SEC = 8.0
+RETRY_AFTER_CAP_SEC = 30.0
+
+
+def retry_delay(attempt: int, retry_after: Optional[str] = None, rng: random.Random = random) -> float:
+    """Bounded exponential backoff with jitter for TRANSIENT failures (timeouts, connection errors, 429, 502-504).
+    attempt=1 -> ~0.5 s, 2 -> ~1 s, 3 -> ~2 s … capped at 8 s, +0-25% jitter so workers don't retry in lockstep.
+    A numeric Retry-After (seconds) is honored up to 30 s. 4xx (except 429), robots and SSRF are never retried."""
+    delay = min(RETRY_CAP_SEC, RETRY_BASE_SEC * (2 ** max(0, attempt - 1)))
+    if retry_after:
+        try:
+            delay = max(delay, min(RETRY_AFTER_CAP_SEC, float(str(retry_after).strip())))
+        except ValueError:
+            pass   # HTTP-date form: fall back to backoff
+    return delay + rng.uniform(0, delay * 0.25)
 
 
 def utc_now_iso() -> str:
@@ -228,7 +264,11 @@ def extract_on_page_urls(
             if not rec["hreflang"] and hreflang:
                 rec["hreflang"] = hreflang
 
-    return raw_count, list(grouped.values()), parser
+    out = list(grouped.values())
+    for rec in out:
+        # requested unless EVERY occurrence on this page is a not-requested type (e.g. only a form action)
+        rec["not_requested"] = bool(rec["is_http"] and set(rec["link_types"]) <= NOT_REQUESTED_TYPES)
+    return raw_count, out, parser
 
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".bmp", ".ico", ".tif", ".tiff", ".jfif")
@@ -1388,13 +1428,10 @@ class OnPageAuditEngine:
 
                 if not ssrf_safe or error_type in ("Redirect Loop", "Redirect Without Location", "Invalid Redirect Target"):
                     break   # deterministic: a retry cannot change the outcome
-                if final_status in (502, 503, 504) and retries < self.max_retries:
+                if final_status in (429, 502, 503, 504) and retries < self.max_retries:
                     retries += 1
-                    await asyncio.sleep(1.0 * retries)
-                    continue
-                if final_status == 429 and retries < self.max_retries:
-                    retries += 1
-                    await asyncio.sleep(2.0 * retries)
+                    m["retries"] = m.get("retries", 0) + 1
+                    await asyncio.sleep(retry_delay(retries, resp_headers.get("retry-after")))
                     continue
                 break
 
@@ -1414,7 +1451,8 @@ class OnPageAuditEngine:
                 final_status = None
                 retries += 1
                 if retries <= self.max_retries:
-                    await asyncio.sleep(1.0 * retries)
+                    m["retries"] = m.get("retries", 0) + 1
+                    await asyncio.sleep(retry_delay(retries))
 
         elapsed_ms = round(net_ms, 2)
         html_text = ""
@@ -2061,10 +2099,21 @@ class OnPageAuditEngine:
         src_done = self._run_sources_done
         src_left = (self._mirror.get("src") or Counter()).get("PENDING", 0) if self._mirror else 0
         pps = src_done / el
+        # recent (current) rate over a ~60 s window of samples taken at each progress write
+        now = time.monotonic()
+        win = self.__dict__.setdefault("_rate_window", [])
+        win.append((now, src_done))
+        while len(win) > 2 and now - win[0][0] > 60.0:
+            win.pop(0)
+        recent = (src_done - win[0][1]) / (now - win[0][0]) if len(win) > 1 and now > win[0][0] else pps
+        eta_rate = recent if recent > 0 else pps
         k = m["requests_by_kind"]
         return {
             "elapsed_sec": round(el, 1),
             "source_pages_per_sec": round(pps, 2),
+            "source_pages_per_sec_recent": round(recent, 2),
+            "eta_recent_sec": round(src_left / eta_rate, 0) if eta_rate > 0 else None,
+            "retries": m.get("retries", 0),
             "url_validations_per_sec": round(m["dest_validations"] / el, 2),
             "image_validations_per_sec": round(m["image_validations"] / el, 2),
             "total_requests_per_sec": round(m["http_requests"] / el, 2),
@@ -3038,7 +3087,10 @@ class OnPageAuditEngine:
                             norm_found = er["normalized_found_url"]
                             scope = er["found_url_scope"]
                             val_detail = None
-                            if er["is_http"]:
+                            if er.get("not_requested"):
+                                val_src = "NOT_REQUESTED"
+                                rel_remark = "Form action — recorded, not requested (a GET could have side effects or answer 405)"
+                            elif er["is_http"]:
                                 if norm_found not in self._seen_http_dests:
                                     self._seen_http_dests.add(norm_found)
                                     val_src = "NEW_CHECK"

@@ -63,6 +63,17 @@ ON_PAGE_IMAGE_SCHEMA_SQL = """
     );
     CREATE INDEX IF NOT EXISTS idx_opivc_state ON on_page_image_validation_cache(job_id, validation_state);
 
+    -- input lines that did not become a source page (invalid URL, exact or normalized duplicate)
+    CREATE TABLE IF NOT EXISTS on_page_input_exceptions (
+        job_id TEXT NOT NULL,
+        line_no INTEGER NOT NULL,
+        input_url TEXT DEFAULT '',
+        normalized_url TEXT DEFAULT '',
+        reason TEXT NOT NULL,
+        duplicate_of TEXT DEFAULT '',
+        PRIMARY KEY (job_id, line_no)
+    );
+
     -- SEO / technical-SEO facts: one row per parsed 2xx HTML sitemap page (seo_audit.page_facts)
     CREATE TABLE IF NOT EXISTS on_page_seo_pages (
         job_id TEXT NOT NULL,
@@ -107,6 +118,8 @@ ON_PAGE_IMAGE_SCHEMA_SQL = """
         internal_nofollow_links INTEGER DEFAULT 0,
         url_length INTEGER DEFAULT 0,
         checked_at TIMESTAMP,
+        script_count INTEGER DEFAULT 0,
+        js_rendering_suspected INTEGER DEFAULT 0,
         PRIMARY KEY (job_id, source_page_url)
     );
 
@@ -143,6 +156,12 @@ ON_PAGE_IMAGE_SCHEMA_SQL = """
 """
 
 ON_PAGE_IMAGE_ALTERS = (
+    "ALTER TABLE on_page_audit_jobs ADD COLUMN input_urls_total INTEGER",
+    "ALTER TABLE on_page_sitemap_sources ADD COLUMN content_type TEXT DEFAULT ''",
+    "ALTER TABLE on_page_sitemap_sources ADD COLUMN response_time_ms REAL DEFAULT 0",
+    "ALTER TABLE on_page_sitemap_sources ADD COLUMN child_sitemap_count INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_seo_pages ADD COLUMN script_count INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_seo_pages ADD COLUMN js_rendering_suspected INTEGER DEFAULT 0",
     "ALTER TABLE on_page_link_relationships ADD COLUMN validation_detail TEXT DEFAULT ''",
     "ALTER TABLE on_page_validation_cache ADD COLUMN seeded_by TEXT DEFAULT ''",
     "ALTER TABLE on_page_source_pages ADD COLUMN raw_image_occurrences_count INTEGER DEFAULT 0",

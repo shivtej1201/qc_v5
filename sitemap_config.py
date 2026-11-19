@@ -148,6 +148,9 @@ class SitemapConfigStore:
                 "urls_listed": int(s.get("urls_found") or 0), "duplicates": int(s.get("duplicates") or 0),
                 "rejected": int(s.get("rejected") or 0), "size_bytes": int(s.get("size_bytes") or 0),
                 "error_message": str(s.get("error_message") or "")[:300],
+                "content_type": str(s.get("content_type") or "")[:120],
+                "response_time_ms": float(s.get("response_time_ms") or 0.0),
+                "child_sitemap_count": int(s.get("child_sitemap_count") or 0),
                 **per_sm.get(s.get("sitemap_url", ""), {"unique_urls": 0, "robots_blocked": 0, "lastmod_missing": 0,
                                                         "lastmod_invalid": 0, "lastmod_future": 0}),
             })
@@ -219,7 +222,8 @@ class SitemapConfigStore:
                          "priority": r["priority"]} for r in sel["urls"]],
             "sources": [{**{k: s.get(k) for k in ("sitemap_url", "parent_sitemap_url", "depth", "kind", "status",
                                                     "http_status", "classification", "urls_listed", "duplicates",
-                                                    "rejected", "size_bytes", "error_message")},
+                                                    "rejected", "size_bytes", "error_message", "content_type",
+                                                    "response_time_ms", "child_sitemap_count")},
                          "selected": int(s["sitemap_url"] in chosen or s["kind"] == "INDEX")}
                         for s in snap["sources"]],
         }

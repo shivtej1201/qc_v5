@@ -2,13 +2,23 @@ import asyncio
 from playwright.async_api import async_playwright
 from config import settings
 
+BROWSER_MIN_CAPACITY, BROWSER_MAX_CAPACITY = 1, 4
+LEASE_TIMEOUT_SEC = 30.0
+
+
 class BrowserPool:
-    def __init__(self):
+    """Small Playwright page pool. HTTP-first crawling only borrows a page when rendering is required.
+    Capacity is clamped to 1-4 (default 2 via BROWSER_CONCURRENCY); a lease waits at most LEASE_TIMEOUT_SEC."""
+
+    def __init__(self, capacity: int = None, lease_timeout: float = LEASE_TIMEOUT_SEC):
+        cap = settings.BROWSER_CONCURRENCY if capacity is None else capacity
+        self.capacity = max(BROWSER_MIN_CAPACITY, min(BROWSER_MAX_CAPACITY, int(cap)))
+        self.lease_timeout = lease_timeout
         self.playwright = None
         self.browser = None
         self.context = None
         self.pages = []
-        self.semaphore = asyncio.Semaphore(settings.BROWSER_CONCURRENCY)
+        self.semaphore = asyncio.Semaphore(self.capacity)
 
     async def start(self):
         self.playwright = await async_playwright().start()
@@ -18,7 +28,7 @@ class BrowserPool:
             ignore_https_errors=True,
             service_workers="block"
         )
-        for _ in range(settings.BROWSER_CONCURRENCY):
+        for _ in range(self.capacity):
             page = await self.context.new_page()
             self.pages.append(page)
 
@@ -33,7 +43,11 @@ class BrowserPool:
         if self.playwright: await self.playwright.stop()
 
     async def get_page(self):
-        await self.semaphore.acquire()
+        """Lease a page or return None (timeout / no usable page). The slot is ALWAYS returned on failure."""
+        try:
+            await asyncio.wait_for(self.semaphore.acquire(), timeout=self.lease_timeout)
+        except asyncio.TimeoutError:
+            return None
         for idx, page in enumerate(self.pages):
             if not getattr(page, "is_busy", False):
                 if page.is_closed():
@@ -44,6 +58,7 @@ class BrowserPool:
                         continue
                 page.is_busy = True
                 return page
+        self.semaphore.release()   # no usable page: give the slot back (previously leaked)
         return None
 
     def release_page(self, page):

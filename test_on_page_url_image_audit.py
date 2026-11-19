@@ -22,7 +22,7 @@ ZIP_FILES = sorted([
     "05_image_audit.csv", "06_unique_image_validation.csv", "07_broken_urls.csv", "08_redirect_urls.csv",
     "09_broken_images.csv", "10_external_urls.csv", "11_reconciliation.csv",
     "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv", "15_seo_page_audit.csv",
-    "16_sitemap_audit.csv",
+    "16_sitemap_audit.csv", "17_input_exceptions.csv", "00_manifest.csv",
 ])
 
 

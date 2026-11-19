@@ -78,12 +78,14 @@ def store_sitemap_meta(conn, job_id: str, meta: dict):
               str(e.get("changefreq") or "")[:20], e.get("priority")) for e in meta.get("entries", [])])
         conn.executemany(
             "INSERT OR IGNORE INTO on_page_sitemap_sources (job_id, sitemap_url, parent_sitemap_url, depth, kind, status, "
-            "http_status, classification, urls_listed, duplicates, rejected, size_bytes, selected, error_message) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "http_status, classification, urls_listed, duplicates, rejected, size_bytes, selected, error_message, "
+            "content_type, response_time_ms, child_sitemap_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(job_id, s["sitemap_url"], s.get("parent_sitemap_url") or "", int(s.get("depth") or 0), s.get("kind") or "",
               s.get("status") or "", s.get("http_status"), s.get("classification") or "", int(s.get("urls_listed") or 0),
               int(s.get("duplicates") or 0), int(s.get("rejected") or 0), int(s.get("size_bytes") or 0),
-              int(s.get("selected", 1)), str(s.get("error_message") or "")[:300]) for s in meta.get("sources", [])])
+              int(s.get("selected", 1)), str(s.get("error_message") or "")[:300], str(s.get("content_type") or "")[:120],
+              float(s.get("response_time_ms") or 0.0), int(s.get("child_sitemap_count") or 0))
+             for s in meta.get("sources", [])])
 
 
 def run(a) -> dict:
@@ -97,8 +99,24 @@ def run(a) -> dict:
     if a.per_host_concurrency > settings.LINK_AUDIT_PER_HOST_CONCURRENCY:
         settings.LINK_AUDIT_PER_HOST_CONCURRENCY = a.per_host_concurrency
 
-    with open(a.urls, encoding="utf-8") as f:
-        urls = [u.strip() for u in f if u.strip()]
+    with open(a.urls, encoding="utf-8-sig") as f:
+        raw_lines = [u.strip() for u in f]
+    # Input accounting: every non-empty line becomes a source page OR an input exception (never dropped silently)
+    urls, exceptions, first_of = [], [], {}
+    input_total = 0
+    for line_no, u in enumerate(raw_lines, 1):
+        if not u:
+            continue
+        input_total += 1
+        n = URLNormalizer.normalize(u) if u.lower().startswith(("http://", "https://")) else ""
+        if not n or not URLNormalizer.is_valid_http_url(n):
+            exceptions.append((line_no, u[:2000], n[:2000], "INVALID_URL", ""))
+        elif n in first_of:
+            prev = first_of[n]
+            exceptions.append((line_no, u[:2000], n, "EXACT_DUPLICATE" if prev == u else "NORMALIZED_DUPLICATE", prev))
+        else:
+            first_of[n] = u
+            urls.append(u)
     sm_meta = None
     if a.sitemap_meta:
         with open(a.sitemap_meta, encoding="utf-8") as f:
@@ -164,6 +182,11 @@ def run(a) -> dict:
 
     try:
         eng.initialize_inventory(entries)
+        with eng.conn:
+            eng.conn.executemany(
+                "INSERT OR IGNORE INTO on_page_input_exceptions (job_id, line_no, input_url, normalized_url, reason, duplicate_of) "
+                "VALUES (?, ?, ?, ?, ?, ?)", [(a.job_id, *e) for e in exceptions])
+            eng.conn.execute("UPDATE on_page_audit_jobs SET input_urls_total = ? WHERE job_id = ?", (input_total, a.job_id))
         if sm_meta:
             store_sitemap_meta(eng.conn, a.job_id, sm_meta)
         stats = asyncio.run(_run_with_stop_watch())
@@ -188,7 +211,8 @@ def run(a) -> dict:
               "stats": stats, "performance": perf, "stopped": stopped}
     if not a.no_package and not a.max_pages and not stopped:
         t1 = time.time()
-        pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf)
+        pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf,
+                                        project_id=a.primary_domain)
         result["package"] = {k: v for k, v in pkg.items() if k != "summary"}
         result["package_seconds"] = round(time.time() - t1, 1)
         result["final_qc_status"] = pkg["final_qc_status"]

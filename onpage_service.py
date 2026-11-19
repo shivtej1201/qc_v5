@@ -25,6 +25,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import issue_store
 from seo_audit import SEO_CATEGORIES
 from sitemap_config import SitemapConfigStore
 
@@ -51,6 +52,11 @@ PRESETS: Dict[str, Dict[str, Any]] = {
     "max_tested": {
         "label": "Max tested", "description": "14 req/s: fastest stable rate on the simulated Akamai model (~13 min / 10K).",
         "target_rps": 14.0, "max_rps": 14.0, "source_concurrency": 20, "dest_concurrency": 20, "image_concurrency": 30,
+    },
+    "enterprise_150k": {
+        "label": "Enterprise 150K", "description": "16 req/s (adaptive up to 18), concurrency 35/35/50: ~150K pages in "
+                       "~3 h IF the edge sustains 16 req/s. Measured on the simulated edge only; verify the live edge first.",
+        "target_rps": 16.0, "max_rps": 18.0, "source_concurrency": 35, "dest_concurrency": 35, "image_concurrency": 50,
     },
 }
 TUNABLE_KEYS = {"target_rps": float, "max_rps": float, "min_rps": float, "source_concurrency": int,
@@ -186,16 +192,107 @@ class OnPageAuditService:
             return None
 
     def describe(self, job_id: str) -> Dict[str, Any]:
+        state = self.lifecycle(job_id)       # may append a terminal event: read the metadata after it
         meta = self._meta(job_id)
         res = self.result(job_id) or {}
         return {
             **{k: meta.get(k) for k in ("job_id", "name", "created_at", "preset", "config", "url_count", "primary_domain",
                                         "source")},
             "run_state": self.run_state(job_id),
+            "lifecycle": state,
+            "events": meta.get("events", [])[-20:],
             "final_qc_status": res.get("final_qc_status"),
             "crawl_seconds": res.get("crawl_seconds"),
             "package_available": os.path.exists(self.package_zip(job_id)),
             "estimate": estimate_duration(meta.get("url_count", 0), (meta.get("config") or {}).get("target_rps", 8.0)),
+        }
+
+    # ------------------------------------------------------------------ lifecycle
+    # CREATED -> QUEUED -> RUNNING -> (PAUSING -> PAUSED -> RESUMED) -> COMPLETED | PARTIAL | FAILED
+    #                         \-> CANCELLING -> CANCELLED        crash -> INTERRUPTED (resumable)
+    LIFECYCLE_STATES = ("CREATED", "QUEUED", "RUNNING", "PAUSING", "PAUSED", "RESUMED", "CANCELLING", "CANCELLED",
+                        "COMPLETED", "PARTIAL", "FAILED", "INTERRUPTED")
+
+    def _event(self, job_id: str, state: str, note: str = "", meta: Optional[Dict[str, Any]] = None):
+        meta = meta or self._meta(job_id)
+        ev = meta.setdefault("events", [])
+        if not ev or ev[-1]["state"] != state:
+            ev.append({"state": state, "at": _utc(), "note": note})
+            self._save_meta(job_id, meta)
+        return meta
+
+    def lifecycle(self, job_id: str) -> str:
+        """Single source of truth for the job state, derived from the worker process, its result and metadata;
+        terminal states observed here are appended to the event history once."""
+        meta = self._meta(job_id)
+        rs = self.run_state(job_id)
+        last = (meta.get("events") or [{}])[-1].get("state")
+        if rs == "STOPPING":
+            st = "CANCELLING" if meta.get("cancel_requested") else "PAUSING"
+        elif rs == "RUNNING":
+            st = "RESUMED" if last == "RESUMED" else "RUNNING"
+        elif meta.get("cancel_requested"):
+            st = "CANCELLED"
+        elif rs == "STOPPED":
+            st = "PAUSED"
+        elif rs == "QUEUED":
+            st = "QUEUED" if meta.get("events") else "CREATED"
+        else:
+            st = rs     # COMPLETED / PARTIAL / FAILED / INTERRUPTED
+        if st in ("CANCELLED", "PAUSED", "COMPLETED", "PARTIAL", "FAILED", "INTERRUPTED"):
+            self._event(job_id, st, meta=meta)
+        return st
+
+    def pause(self, job_id: str) -> Dict[str, Any]:
+        """Graceful pause: in-flight work is committed; resume continues from the checkpoint."""
+        if self._alive(job_id):
+            self._event(job_id, "PAUSING")
+        return self.stop(job_id)
+
+    def cancel(self, job_id: str) -> Dict[str, Any]:
+        """Stop for good. Completed work and the partial report are kept; the audit can no longer be resumed."""
+        meta = self._meta(job_id)
+        if not meta.get("cancel_requested"):
+            meta["cancel_requested"] = True
+            self._save_meta(job_id, meta)
+            if self._alive(job_id):
+                self._event(job_id, "CANCELLING")
+                open(os.path.join(self._dir(job_id), "STOP"), "w").close()
+            else:
+                self._event(job_id, "CANCELLED")
+        return self.describe(job_id)
+
+    def progress(self, job_id: str, stats: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Command Center numbers, all from the backend (DB counters + worker live metrics); no client timers."""
+        st = stats or {}
+        live = st.get("live_metrics") or {}
+        total = int(st.get("source_pages_total") or 0)
+        done = int(st.get("source_pages_processed") or 0)
+        running = self.run_state(job_id) in ("RUNNING", "STOPPING")
+        res = self.result(job_id) or {}
+        issues = None
+        try:
+            issues = int(self.issue_overview(job_id)["total"])
+        except (FileNotFoundError, KeyError):
+            pass
+        return {
+            "total": total, "processed": done, "remaining": max(0, total - done), "queued": max(0, total - done),
+            "success": int(st.get("source_pages_completed") or 0),
+            "failed": int(st.get("source_pages_failed") or 0) + int(st.get("source_pages_timed_out") or 0),
+            "blocked": int(st.get("source_pages_blocked") or 0),
+            "skipped": int(st.get("source_pages_explicitly_excluded") or 0),
+            "percent": round(100.0 * done / total, 2) if total else 0.0,
+            "links": int(st.get("url_relationships_persisted") or 0),
+            "images": int(st.get("image_relationships_persisted") or 0),
+            "unique_urls": int(st.get("unique_http_destinations") or 0),
+            "unique_images": int(st.get("unique_image_urls") or 0),
+            "issues": issues,
+            "throughput_current_pps": live.get("source_pages_per_sec_recent") if running else 0.0,
+            "throughput_average_pps": live.get("source_pages_per_sec"),
+            "requests_per_sec_primary": live.get("primary_requests_per_sec"),
+            "elapsed_sec": live.get("elapsed_sec") if running else res.get("crawl_seconds", live.get("elapsed_sec")),
+            "eta_sec": (live.get("eta_recent_sec") or live.get("eta_sources_sec")) if running else 0,
+            "source": "backend",
         }
 
     def _active_for_domain(self, domain: str) -> Optional[str]:
@@ -214,12 +311,8 @@ class OnPageAuditService:
               source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if preset not in PRESETS:
             raise ValueError(f"unknown preset {preset!r}; choose one of {sorted(PRESETS)}")
-        clean, seen = [], set()
-        for u in urls:
-            u = (u or "").strip()
-            if u and u not in seen:
-                seen.add(u)
-                clean.append(u)
+        # keep every non-empty line: the worker records invalid / duplicate lines in 17_input_exceptions.csv
+        clean = [u.strip() for u in urls if u and u.strip()]
         if not clean:
             raise ValueError("no URLs supplied")
         config = {k: v for k, v in PRESETS[preset].items() if k in TUNABLE_KEYS}
@@ -244,9 +337,11 @@ class OnPageAuditService:
         if sitemap_meta:
             SitemapConfigStore._write_json(os.path.join(d, "sitemap_meta.json"), sitemap_meta)
         meta = {"job_id": job_id, "name": (name or "On-page audit").strip()[:120], "created_at": _utc(),
-                "preset": preset, "config": config, "url_count": len(clean), "primary_domain": domain,
+                "preset": preset, "config": config, "url_count": len(set(clean)), "input_lines": len(clean),
+                "primary_domain": domain,
                 "extra_args": list(extra_args or []), "source": source or {"type": "url_list"}}
         self._save_meta(job_id, meta)
+        self._event(job_id, "CREATED", meta=meta)
         self._spawn(job_id, meta)
         return self.describe(job_id)
 
@@ -321,10 +416,12 @@ class OnPageAuditService:
         log.write(f"\n=== {_utc()} start {' '.join(args[1:4])} ...\n")
         log.flush()
         creation = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)} if os.name == "nt" else {}
+        self._event(job_id, "QUEUED")
         proc = subprocess.Popen(args, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **creation)
         self.procs[job_id] = proc
         with open(os.path.join(d, "worker.pid"), "w") as f:
             f.write(str(proc.pid))
+        self._event(job_id, "RUNNING")
 
     def stop(self, job_id: str) -> Dict[str, Any]:
         """Graceful: in-flight requests finish and are committed; the job stays resumable."""
@@ -336,12 +433,17 @@ class OnPageAuditService:
 
     def resume(self, job_id: str) -> Dict[str, Any]:
         meta = self._meta(job_id)
+        if meta.get("cancel_requested"):
+            raise AuditConflict(f"audit {job_id} was cancelled and cannot be resumed; start a new audit")
         if self._alive(job_id):
             raise AuditConflict(f"audit {job_id} is already running")
         busy = self._active_for_domain(meta["primary_domain"])
         if busy:
             raise AuditConflict(f"audit {busy} is already crawling {meta['primary_domain']}")
+        meta["resumes"] = int(meta.get("resumes") or 0) + 1
+        self._save_meta(job_id, meta)
         self._spawn(job_id, meta)
+        self._event(job_id, "RESUMED")
         return self.describe(job_id)
 
     def wait(self, job_id: str, timeout: float = 600.0) -> str:
@@ -375,14 +477,28 @@ class OnPageAuditService:
             types = [dict(r, relationships=int(r["relationships"]), unique_urls=int(r["unique_urls"]),
                           source_pages_affected=int(r["source_pages_affected"])) for r in csv.DictReader(f)]
         sev = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-        url_counts: Dict[Tuple[str, str], int] = {}
-        with open(p12, newline="", encoding="utf-8") as f:
-            for r in csv.DictReader(f):
-                sev[r["severity"]] = sev.get(r["severity"], 0) + 1
-                if r["severity"] == "HIGH" and r["category"] != "SOURCE_PAGE":
-                    k = (r["normalized_url"], r["issue_type"])
-                    url_counts[k] = url_counts.get(k, 0) + 1
-        top_urls = sorted(url_counts.items(), key=lambda kv: -kv[1])[:10]
+        conn = self._db()
+        try:
+            in_db = issue_store.has_issues_table_rows(conn, job_id)
+            if in_db:      # indexed aggregation instead of re-reading a multi-million-row CSV
+                for k, v in conn.execute("SELECT severity, COUNT(*) FROM on_page_issues WHERE job_id = ? GROUP BY severity",
+                                         (job_id,)):
+                    sev[k] = v
+                top_urls = [((u, t), n) for u, t, n in conn.execute(
+                    """SELECT subject_url, rule_code, COUNT(*) AS n FROM on_page_issues
+                        WHERE job_id = ? AND severity = 'HIGH' AND category != 'SOURCE_PAGE'
+                        GROUP BY subject_url, rule_code ORDER BY n DESC, subject_url LIMIT 10""", (job_id,))]
+        finally:
+            conn.close()
+        if not in_db:
+            url_counts: Dict[Tuple[str, str], int] = {}
+            with open(p12, newline="", encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    sev[r["severity"]] = sev.get(r["severity"], 0) + 1
+                    if r["severity"] == "HIGH" and r["category"] != "SOURCE_PAGE":
+                        k = (r["normalized_url"], r["issue_type"])
+                        url_counts[k] = url_counts.get(k, 0) + 1
+            top_urls = sorted(url_counts.items(), key=lambda kv: -kv[1])[:10]
         with open(self._csv(job_id, "01_summary.csv"), newline="", encoding="utf-8") as f:
             summary = {r["metric"]: r["value"] for r in csv.DictReader(f)}
         data = {"by_severity": sev, "types": types, "total": sum(sev.values()), "summary": summary,
@@ -443,10 +559,191 @@ class OnPageAuditService:
                 "coverage": {k: pct(k) for k in c},
                 "categories": sorted(cats.values(), key=lambda x: -x["issues"]), "sitemaps": sitemaps}
 
+    # ------------------------------------------------------------------ database-backed explorers (server-side paging)
+    def _db(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000;")
+        return conn
+
+    @staticmethod
+    def _page(conn, select: str, base: str, where: List[str], args: List[Any], sort: str, sort_cols: Dict[str, str],
+              order: str, offset: int, limit: int) -> Dict[str, Any]:
+        """One bounded page: whitelisted sort column, LIMIT <= 500, total via COUNT on the same filter."""
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        if sort and sort not in sort_cols:
+            raise ValueError(f"sort must be one of {', '.join(sort_cols)}")
+        col = sort_cols.get(sort or "", next(iter(sort_cols.values())))
+        direction = "DESC" if str(order).lower() == "desc" else "ASC"
+        w = " AND ".join(where)
+        order_by = ", ".join(f"{c.strip()} {direction}" for c in col.split(","))   # direction on EVERY key
+        total = conn.execute(f"SELECT COUNT(*) {base} WHERE {w}", args).fetchone()[0]
+        cur = conn.execute(f"SELECT {select} {base} WHERE {w} ORDER BY {order_by} LIMIT ? OFFSET ?",
+                           args + [limit, offset])
+        cols = [d[0] for d in cur.description]
+        return {"items": [dict(zip(cols, r)) for r in cur.fetchall()], "matched": total, "offset": offset,
+                "limit": limit, "sort": sort or "", "order": direction.lower()}
+
+    def _project(self, job_id: str) -> str:
+        return (self._meta(job_id).get("primary_domain") or "").lower()
+
+    def issues_db(self, job_id: str, severity: Optional[str] = None, rule: Optional[str] = None,
+                  category: Optional[str] = None, status: Optional[str] = None, search: Optional[str] = None,
+                  page_url: Optional[str] = None, sort: str = "", order: str = "asc", offset: int = 0,
+                  limit: int = 100) -> Dict[str, Any]:
+        self._meta(job_id)
+        project = self._project(job_id)
+        conn = self._db()
+        try:
+            issue_store.ensure_issue_schema(conn)
+            where, args = ["i.job_id = ?"], [job_id]
+            for col, val in (("i.severity", severity), ("i.rule_code", rule), ("i.category", category),
+                             ("i.page_url", page_url)):
+                if val:
+                    where.append(f"{col} = ?")
+                    args.append(val)
+            if status:
+                where.append("COALESCE(st.status, 'OPEN') = ?")
+                args.append(status.upper())
+            if search:
+                where.append("(i.page_url LIKE ? OR i.subject_url LIKE ? OR i.found_url LIKE ?)")
+                args += [f"%{search}%"] * 3
+            sev = "CASE i.severity WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 WHEN 'LOW' THEN 2 ELSE 3 END, i.id"
+            res = self._page(conn,
+                """i.issue_key, i.severity, i.category, i.rule_code AS issue_type, i.dimension, i.page_url AS source_page_url,
+                   i.element_type, i.found_url, i.subject_url AS normalized_url, i.anchor_or_alt_text, i.location,
+                   i.http_status, i.initial_status, i.final_url, i.hop_count, i.detail, i.validation_source,
+                   COALESCE(st.status, 'OPEN') AS status, COALESCE(st.note, '') AS status_note""",
+                "FROM on_page_issues i LEFT JOIN on_page_issue_status st ON st.project_id = ? AND st.issue_key = i.issue_key",
+                where, [project] + args, sort,
+                {"severity": sev, "rule": "i.rule_code, i.id", "page": "i.page_url, i.id", "status": "status, i.id",
+                 "id": "i.id"}, order, offset, limit)
+        finally:
+            conn.close()
+        from on_page_issue_rules import action_for
+        for it in res["items"]:
+            it["recommended_action"] = action_for(it["issue_type"], it["category"])
+            it["status_bucket"] = None
+        res["source"] = "database"
+        return res
+
+    def set_issue_status(self, job_id: str, key: str, status: str, note: str = "") -> Dict[str, Any]:
+        if not re.match(r"^[a-f0-9]{20}$", key or ""):
+            raise ValueError("invalid issue key")
+        conn = self._db()
+        try:
+            return issue_store.set_status(conn, job_id, self._project(job_id), key, status, note)
+        finally:
+            conn.close()
+
+    def score(self, job_id: str) -> Dict[str, Any]:
+        self._meta(job_id)
+        conn = self._db()
+        try:
+            sc = issue_store.get_score(conn, job_id)
+        finally:
+            conn.close()
+        if sc is None:
+            raise KeyError(job_id)
+        return sc
+
+    def urls(self, job_id: str, status_bucket: Optional[str] = None, crawl_state: Optional[str] = None,
+             search: Optional[str] = None, sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+        """URL audit explorer: one row per source page (server-side filter / sort / paging)."""
+        self._meta(job_id)
+        conn = self._db()
+        try:
+            where, args = ["s.job_id = ?"], [job_id]
+            if crawl_state:
+                where.append("s.crawl_state = ?"); args.append(crawl_state)
+            if status_bucket:
+                lo = {"2xx": 200, "3xx": 300, "4xx": 400, "5xx": 500}.get(status_bucket)
+                if lo is None:
+                    raise ValueError("status_bucket must be 2xx, 3xx, 4xx or 5xx")
+                where.append("s.http_status BETWEEN ? AND ?"); args += [lo, lo + 99]
+            if search:
+                where.append("s.source_page_url LIKE ?"); args.append(f"%{search}%")
+            return self._page(conn,
+                """s.source_page_id, s.source_page_url, s.crawl_state, s.initial_http_status, s.http_status, s.final_url,
+                   s.redirect_count, s.response_time_ms, s.content_type, s.page_title, s.relationships_count,
+                   s.image_relationships_count, s.business, s.page_type, s.language, s.source_sitemap,
+                   p.indexable, p.meta_robots, p.h1_count, p.word_count, p.title_length, p.meta_description_length""",
+                "FROM on_page_source_pages s LEFT JOIN on_page_seo_pages p ON p.job_id = s.job_id AND p.source_page_url = s.source_page_url",
+                where, args, sort, {"id": "s.source_page_id", "status": "s.http_status, s.source_page_id",
+                                    "url": "s.source_page_url", "time": "s.response_time_ms, s.source_page_id",
+                                    "links": "s.relationships_count, s.source_page_id"}, order, offset, limit)
+        finally:
+            conn.close()
+
+    def links(self, job_id: str, scope: Optional[str] = None, url_type: Optional[str] = None,
+              status_bucket: Optional[str] = None, source_page: Optional[str] = None, search: Optional[str] = None,
+              sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+        """Link audit explorer: one row per page -> URL relationship with its (deduplicated) validation."""
+        self._meta(job_id)
+        conn = self._db()
+        try:
+            where, args = ["r.job_id = ?"], [job_id]
+            for col, val in (("r.found_url_scope", scope), ("r.found_url_type", url_type), ("c.status_bucket", status_bucket),
+                             ("r.source_page_url", source_page)):
+                if val:
+                    where.append(f"{col} = ?"); args.append(val)
+            if search:
+                where.append("(r.normalized_found_url LIKE ? OR r.anchor_text LIKE ?)"); args += [f"%{search}%"] * 2
+            return self._page(conn,
+                """r.id, r.source_page_url, r.found_url, r.normalized_found_url AS normalized_url, r.found_url_type AS url_type,
+                   r.found_url_scope AS internal_external, r.anchor_text, r.rel, r.representative_location AS component,
+                   r.language, r.business, r.page_type, r.validation_source, c.http_status, c.initial_http_status,
+                   c.final_url, c.redirect_count, c.status_bucket, c.error_type""",
+                "FROM on_page_link_relationships r LEFT JOIN on_page_validation_cache c ON c.job_id = r.job_id AND c.normalized_url = r.normalized_found_url",
+                where, args, sort, {"id": "r.id", "status": "c.http_status, r.id", "url": "r.normalized_found_url, r.id",
+                                    "page": "r.source_page_url, r.id"}, order, offset, limit)
+        finally:
+            conn.close()
+
+    def images(self, job_id: str, internal_external: Optional[str] = None, status_bucket: Optional[str] = None,
+               alt: Optional[str] = None, source_page: Optional[str] = None, search: Optional[str] = None,
+               sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+        """Image audit explorer: one row per page -> image placement with its (deduplicated) validation."""
+        self._meta(job_id)
+        conn = self._db()
+        try:
+            where, args = ["i.job_id = ?"], [job_id]
+            for col, val in (("i.internal_external", internal_external), ("ic.status_bucket", status_bucket),
+                             ("i.source_page_url", source_page)):
+                if val:
+                    where.append(f"{col} = ?"); args.append(val)
+            if alt:
+                cond = {"missing": "i.alt_present = 0", "empty": "i.alt_present = 1 AND i.alt_text = ''",
+                        "present": "i.alt_present = 1 AND i.alt_text != ''"}.get(alt)
+                if cond is None:
+                    raise ValueError("alt must be missing, empty or present")
+                where.append(cond)
+            if search:
+                where.append("i.normalized_image_url LIKE ?"); args.append(f"%{search}%")
+            return self._page(conn,
+                """i.id, i.source_page_url, i.image_url, i.normalized_image_url, i.attribute_source, i.alt_present, i.alt_text,
+                   i.width, i.height, i.loading, i.internal_external, i.validation_source, ic.http_status, ic.content_type,
+                   ic.content_length, ic.status_bucket, ic.image_issue, ic.error_type""",
+                "FROM on_page_image_relationships i LEFT JOIN on_page_image_validation_cache ic ON ic.job_id = i.job_id AND ic.normalized_url = i.normalized_image_url",
+                where, args, sort, {"id": "i.id", "status": "ic.http_status, i.id", "url": "i.normalized_image_url, i.id",
+                                    "size": "ic.content_length, i.id"}, order, offset, limit)
+        finally:
+            conn.close()
+
     def issues(self, job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
                category: Optional[str] = None, search: Optional[str] = None, offset: int = 0,
                limit: int = 100) -> Dict[str, Any]:
-        """Filtered page of 12_issues.csv (streamed; bounded memory)."""
+        """Filtered page of issues: from the database (indexed, server-side) when the audit has persisted issues,
+        else from 12_issues.csv (audits packaged before issue persistence)."""
+        conn = self._db()
+        try:
+            in_db = issue_store.has_issues_table_rows(conn, job_id)
+        finally:
+            conn.close()
+        if in_db:
+            return self.issues_db(job_id, severity=severity, rule=issue_type, category=category, search=search,
+                                  offset=offset, limit=min(int(limit), 500))
         limit = max(1, min(int(limit), 1000))
         offset = max(0, int(offset))
         s = (search or "").lower().strip()

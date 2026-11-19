@@ -116,6 +116,7 @@ ACTIONS: Dict[str, str] = {
     "STRUCTURED_DATA_INVALID": "JSON-LD does not parse, so search engines ignore it. Fix the syntax (validate with a Rich Results test).",
     "STRUCTURED_DATA_MISSING": "No structured data. Consider schema.org markup suited to the page (Organization, BreadcrumbList, FAQPage, Product...).",
     "INTERNAL_NOFOLLOW_LINKS": "Internal links with rel=nofollow waste internal link equity. Remove nofollow from internal links.",
+    "JS_RENDERING_SUSPECTED": "Serve the main content and links in the initial HTML (SSR/prerendering), or verify with a rendered crawl: search engines and this HTTP audit see an almost empty page.",
     "THIN_CONTENT": "Little visible text. Expand with useful, unique content, or noindex/consolidate the page if it has no search value.",
     "DUPLICATE_CONTENT": "Visible text is identical to other audited pages. Consolidate, differentiate, or canonicalize to one version.",
     "HREFLANG_INVALID_CODE": "Use valid ISO 639-1 language (+ optional ISO 3166-1 region) codes, e.g. en-GB not en-UK; x-default for the fallback.",
@@ -139,7 +140,13 @@ ACTIONS: Dict[str, str] = {
     "SITEMAP_LASTMOD_FUTURE": "<lastmod> is in the future. Set it to the page's real last modification date.",
 }
 
-ELEMENT_CATEGORY = {"CANONICAL": "CANONICAL", "HREFLANG": "HREFLANG", "IFRAME": "IFRAME"}
+ELEMENT_CATEGORY = {"CANONICAL": "CANONICAL", "HREFLANG": "HREFLANG", "IFRAME": "IFRAME",
+                    "SCRIPT": "RESOURCE", "STYLESHEET": "RESOURCE", "LINK_RESOURCE": "RESOURCE",
+                    "CSS_RESOURCE": "RESOURCE", "MEDIA": "RESOURCE", "EMBED": "RESOURCE",
+                    "SOCIAL_URL": "METADATA_URL", "JSONLD_URL": "METADATA_URL", "META_REFRESH": "LINK",
+                    "FORM": "FORM"}
+# categories whose broken status issues mirror 07_broken_urls.csv (trust gate)
+LINK_STATUS_CATEGORIES = frozenset({"LINK", "CANONICAL", "HREFLANG", "IFRAME", "RESOURCE", "METADATA_URL", "FORM"})
 
 CANONICAL_ACTIONS = {
     "REDIRECTED": "Canonical points to a redirecting URL. Point rel=canonical at the final 200 URL.",
@@ -245,6 +252,8 @@ def link_issues(r: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
         return [(category, "INVALID_URL", "MEDIUM", f"Malformed href: {str(r['found_url'])[:120]}")]
     if scope not in ("INTERNAL", "EXTERNAL"):
         return out          # mailto:/tel:/fragment: recorded in 03, not an issue
+    if r.get("base_validation_source") == "NOT_REQUESTED" and not r.get("validation_state"):
+        return out          # form action: recorded, deliberately not requested
     st = _status_issue(r["status_bucket"], r["http_status"], r["initial_status"], r["hop_count"],
                        r["error_type"], r["status_classification"], r["validation_state"])
     if st:

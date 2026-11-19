@@ -37,8 +37,15 @@ SEO_COLUMNS = [
     "meta_refresh", "canonical_outside_head", "jsonld_blocks", "jsonld_invalid", "schema_types", "og_title",
     "og_description", "og_image", "twitter_card", "word_count", "content_hash", "hreflang_count", "hreflang_json",
     "hreflang_x_default", "insecure_resources", "insecure_examples", "internal_links", "external_links",
-    "internal_nofollow_links", "url_length", "checked_at",
+    "internal_nofollow_links", "url_length", "checked_at", "script_count", "js_rendering_suspected",
 ]
+JS_SHELL_MAX_WORDS = 50
+
+
+def js_rendering_suspected(word_count: int, script_count: int, spa_root: str, internal_links: int) -> bool:
+    """HTML that is an app shell: almost no visible text or links, but an app mount point or many scripts.
+    Such pages need a rendered (browser) check; the HTTP crawl alone under-reports their content and links."""
+    return word_count < JS_SHELL_MAX_WORDS and internal_links <= 2 and (bool(spa_root) or script_count >= 5)
 
 
 def _robots_tokens(values: Iterable[str]) -> set:
@@ -148,6 +155,9 @@ def page_facts(job_id: str, src_url: str, final_url: str, parser: Any, rels: Lis
         "insecure_resources": len(insecure), "insecure_examples": " ".join(insecure[:5])[:900],
         "internal_links": internal, "external_links": external, "internal_nofollow_links": internal_nofollow,
         "url_length": len(src_url), "checked_at": checked_at,
+        "script_count": parser.script_count,
+        "js_rendering_suspected": int(js_rendering_suspected(parser.word_count, parser.script_count,
+                                                             parser.spa_root, internal)),
     }
 
 
@@ -229,6 +239,10 @@ def page_issues(f: Dict[str, Any], self_urls: Iterable[str]) -> List[Tuple[str, 
         out.append(("TECH_SEO", "INTERNAL_NOFOLLOW_LINKS", "LOW",
                     f"{f['internal_nofollow_links']} internal link(s) with rel=nofollow"))
 
+    if int(f.get("js_rendering_suspected") or 0):
+        out.append(("TECH_SEO", "JS_RENDERING_SUSPECTED", "MEDIUM",
+                    f"HTML is an app shell ({f.get('word_count')} words, {f.get('script_count')} scripts): content and "
+                    f"links are rendered by JavaScript, so the HTTP crawl under-reports them"))
     # content
     wc = int(f.get("word_count") or 0)
     if wc < THIN_CONTENT_WORDS:

@@ -1,8 +1,20 @@
 from html.parser import HTMLParser
 import hashlib
+import json
+import re
 import urllib.parse
 from config import settings
 from typing import List, Dict, Any
+
+
+IMAGE_EXT_RE = re.compile(r"\.(?:jpe?g|png|gif|webp|avif|svg|bmp|ico|tiff?|jfif)(?:[?#]|$)", re.IGNORECASE)
+CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^'\")]+)\1\s*\)", re.IGNORECASE)
+REFRESH_URL_RE = re.compile(r"url\s*=\s*['\"]?([^'\";]+)", re.IGNORECASE)
+# <link rel> values whose href is a fetchable resource (preconnect/dns-prefetch name origins, not resources)
+RESOURCE_RELS = {"icon", "shortcut", "apple-touch-icon", "apple-touch-icon-precomposed", "mask-icon", "manifest",
+                 "preload", "prefetch", "modulepreload", "prerender"}
+JSONLD_IMAGE_KEYS = {"image", "logo", "thumbnailurl", "contenturl"}
+JSONLD_URL_KEYS = {"url", "@id", "sameas", "item", "mainentityofpage", "target"}
 
 
 def parse_srcset(value: str) -> List[str]:
@@ -92,6 +104,10 @@ class Parser(HTMLParser):
         self.word_count = 0
         self._text_hash = hashlib.blake2b(digest_size=12)
         self._skip_depth = 0
+        self._style_buf = None
+        self._finalized = False
+        self.script_count = 0          # external + inline scripts (JSON-LD excluded)
+        self.spa_root = ''             # id/attribute of a client-side app mount point, if any
 
         self.path = []
         self.ignored_elements = ('header', 'footer', 'nav')
@@ -126,11 +142,17 @@ class Parser(HTMLParser):
             self._skip_depth += 1
             if tag == 'script':
                 stype = str(attr_dict.get('type') or '').strip().lower()
+                if stype != 'application/ld+json':
+                    self.script_count += 1
                 if stype == 'application/ld+json' and len(self.jsonld_blocks) < 50:
                     self._jsonld_buf = []
                 src = str(attr_dict.get('src') or '').strip()
                 if src.lower().startswith('http://') and len(self.insecure_resources) < 50:
                     self.insecure_resources.append('script:' + src[:300])
+                if src:
+                    self._add_url(src, 'SCRIPT', attr_dict)
+            elif tag == 'style':
+                self._style_buf = []
             
         elif tag == 'base':
             href = attr_dict.get('href')
@@ -155,9 +177,16 @@ class Parser(HTMLParser):
                 self.has_charset = True
             elif http_equiv == 'refresh' and not self.meta_refresh:
                 self.meta_refresh = str(attr_dict.get('content') or '').strip()[:200] or '0'
+                m = REFRESH_URL_RE.search(self.meta_refresh)
+                if m and m.group(1).strip():
+                    self._add_url(m.group(1).strip(), 'META_REFRESH', attr_dict)
             prop = str(attr_dict.get('property') or name or '').strip().lower()
             if (prop.startswith('og:') or prop.startswith('twitter:')) and prop not in self.meta_props:
                 self.meta_props[prop] = str(attr_dict.get('content') or '').strip()[:300]
+            if prop in ('og:url', 'twitter:url'):
+                content = str(attr_dict.get('content') or '').strip()
+                if content:
+                    self._add_url(content, 'SOCIAL_URL', attr_dict)
             meta_key = (attr_dict.get('property') or name or '').strip().lower()
             if meta_key in self._img_meta:
                 content = (attr_dict.get('content') or '').strip()
@@ -172,6 +201,10 @@ class Parser(HTMLParser):
             if 'stylesheet' in rel_tokens and link_href.lower().startswith('http://') \
                     and len(self.insecure_resources) < 50:
                 self.insecure_resources.append('stylesheet:' + link_href[:300])
+            if link_href and 'stylesheet' in rel_tokens:
+                self._add_url(link_href, 'STYLESHEET', attr_dict)
+            elif link_href and rel_tokens & RESOURCE_RELS:
+                self._add_url(link_href, 'LINK_RESOURCE', attr_dict)
             if 'canonical' in rel_tokens:
                 if not self.in_head:
                     self.canonical_outside_head += 1
@@ -215,6 +248,12 @@ class Parser(HTMLParser):
             else:
                 self.content_data_pagetypes.append(val)
                     
+        if not self.spa_root and tag == 'div':
+            did = str(attr_dict.get('id') or '')
+            if did in ('root', 'app', '__next', '__nuxt', '___gatsby', 'svelte'):
+                self.spa_root = did
+            elif 'data-reactroot' in attr_dict or 'ng-version' in attr_dict:
+                self.spa_root = 'data-reactroot' if 'data-reactroot' in attr_dict else 'ng-version'
         if tag == 'a':
             href = attr_dict.get('href')
             if href is not None and str(href).strip():
@@ -262,6 +301,21 @@ class Parser(HTMLParser):
                     'component': self._identify_component(),
                 })
                 
+        elif tag in ('video', 'audio', 'track', 'embed') or (tag == 'source' and any(p[0] in ('video', 'audio') for p in self.path)):
+            src = str(attr_dict.get('src') or '').strip()
+            if src:
+                self._add_url(src, 'EMBED' if tag == 'embed' else 'MEDIA', attr_dict)
+            poster = str(attr_dict.get('poster') or '').strip()
+            if poster:
+                self._add_image(poster, 'video.poster', None, attr_dict, self._identify_component())
+        elif tag == 'object':
+            data = str(attr_dict.get('data') or '').strip()
+            if data:
+                self._add_url(data, 'EMBED', attr_dict)
+        elif tag == 'form':
+            action = str(attr_dict.get('action') or '').strip()
+            if action:
+                self._add_url(action, 'FORM', attr_dict, text=str(attr_dict.get('method') or 'get').lower())
         elif tag == 'source' and any(p[0] == 'picture' for p in self.path):
             comp = None
             for a in self._src_attrs:
@@ -273,6 +327,9 @@ class Parser(HTMLParser):
 
         if tag == 'img':
             self._collect_img_attributes(attr_dict)
+        style = attr_dict.get('style')
+        if style and 'url(' in str(style).lower():
+            self._css_urls(str(style), 'css.style')
 
         if tag == 'img':
             src = attr_dict.get('src') or attr_dict.get('data-src') or attr_dict.get('data-lazy-src') or attr_dict.get('data-original')
@@ -298,6 +355,51 @@ class Parser(HTMLParser):
                     'container_type': self._identify_container_type(comp)
                 })
                 
+    def _add_url(self, href: str, url_type: str, attrs: Dict[str, Any], text: str = ''):
+        """Any non-anchor URL on the page (scripts, styles, media, forms, social, JSON-LD...) as a typed entry."""
+        self.all_on_page_urls.append({
+            'href': href[:2000], 'text': text, 'url_type': url_type, 'rel': str(attrs.get('rel') or '').strip(),
+            'hreflang': '', 'component': 'Head' if self.in_head else self._identify_component(),
+        })
+
+    def _css_urls(self, css: str, source: str):
+        """url(...) references in CSS: images go to the image audit, other assets (fonts...) to CSS_RESOURCE."""
+        for m in CSS_URL_RE.finditer(css[:200000]):
+            u = m.group(2).strip()
+            if not u or u.lower().startswith(('data:', '#')):
+                continue
+            if IMAGE_EXT_RE.search(u):
+                self._add_image(u, source, None, {}, 'Head' if self.in_head else self._identify_component())
+            else:
+                self._add_url(u, 'CSS_RESOURCE', {})
+
+    def _jsonld_walk(self, node: Any, depth: int = 0, key: str = ''):
+        if depth > 8:
+            return
+        if isinstance(node, list):
+            for n in node[:200]:
+                self._jsonld_walk(n, depth + 1, key)
+        elif isinstance(node, dict):
+            for k, v in list(node.items())[:200]:
+                self._jsonld_walk(v, depth + 1, str(k).lower())
+        elif isinstance(node, str) and key and node[:8].lower().startswith(('http://', 'https://', '/')):
+            if key in JSONLD_IMAGE_KEYS:
+                self._add_image(node.strip(), 'jsonld.' + key, None, {}, 'Head')
+            elif key in JSONLD_URL_KEYS and not node.startswith('_:'):
+                self.all_on_page_urls.append({'href': node.strip()[:2000], 'text': key, 'url_type': 'JSONLD_URL',
+                                              'rel': '', 'hreflang': '', 'component': 'Structured data'})
+
+    def finalize(self):
+        """Once, after feed(): URLs and images referenced from JSON-LD. Idempotent."""
+        if self._finalized:
+            return
+        self._finalized = True
+        for b in self.jsonld_blocks:
+            try:
+                self._jsonld_walk(json.loads(b))
+            except (ValueError, RecursionError):
+                continue   # invalid JSON-LD is reported by the SEO rules, not here
+
     def _add_image(self, raw: str, attribute_source: str, alt, attrs: Dict[str, Any], component: str):
         # alt: None = not applicable/unknown (meta tags, <source>); otherwise (present, text) from the <img>
         self.all_on_page_images.append({
@@ -336,6 +438,9 @@ class Parser(HTMLParser):
             self._h1_buf = None
         elif tag in ('script', 'style', 'noscript', 'template'):
             self._skip_depth = max(0, self._skip_depth - 1)
+            if tag == 'style' and self._style_buf is not None:
+                self._css_urls(''.join(self._style_buf), 'css.style_block')
+                self._style_buf = None
             if tag == 'script' and self._jsonld_buf is not None:
                 self.jsonld_blocks.append(''.join(self._jsonld_buf))
                 self._jsonld_buf = None
@@ -358,6 +463,8 @@ class Parser(HTMLParser):
             if self._jsonld_buf is not None and self._jsonld_bytes < 512 * 1024:
                 self._jsonld_buf.append(data)
                 self._jsonld_bytes += len(data)
+            elif self._style_buf is not None:
+                self._style_buf.append(data)
         elif not self.in_head and self.current_tag != 'title':
             words = data.split()
             if words:
@@ -433,6 +540,7 @@ class Parser(HTMLParser):
         if self.current_on_page_anchor is not None:
             self.all_on_page_urls.append(self.current_on_page_anchor)
             self.current_on_page_anchor = None
+        self.finalize()
         return list(self.all_on_page_urls)
 
 

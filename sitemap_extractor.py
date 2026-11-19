@@ -563,8 +563,12 @@ class SitemapExtractor:
                 continue
 
             # Fetch sitemap
+            t_fetch = time.perf_counter()
             async with self.semaphore:
                 body, status_code, headers, redirects, diag = await self._safe_fetch(current_sitemap)
+            fetch_meta = {"content_type": str((headers or {}).get("content-type") or (headers or {}).get("Content-Type") or "")[:120],
+                          "response_time_ms": round((time.perf_counter() - t_fetch) * 1000.0, 1),
+                          "size_bytes": len(body or b""), "redirects": len(redirects or [])}
 
             if diag:
                 diagnostics.append({
@@ -608,7 +612,8 @@ class SitemapExtractor:
                     "http_status": status_code,
                     "urls_found": 0,
                     "error_message": error_msg,
-                    "classification": classification
+                    "classification": classification,
+                    **fetch_meta,
                 })
                 errors.append(f"Failed to fetch sitemap '{current_sitemap}': {error_msg}")
                 if progress_callback:
@@ -641,7 +646,8 @@ class SitemapExtractor:
                     "http_status": status_code,
                     "urls_found": 0,
                     "error_message": err_msg,
-                    "classification": "SITEMAP_XML_INVALID"
+                    "classification": "SITEMAP_XML_INVALID",
+                    **fetch_meta,
                 })
                 errors.append(f"Invalid XML in sitemap '{current_sitemap}': {err_msg}")
                 if progress_callback:
@@ -660,7 +666,8 @@ class SitemapExtractor:
                     "urls_found": urls_found,
                     "error_message": "",
                     "classification": "VALID",
-                    "kind": "INDEX", "size_bytes": len(body), "duplicates": 0, "rejected": 0,
+                    "kind": "INDEX", "duplicates": 0, "rejected": 0, "child_sitemap_count": urls_found,
+                    **fetch_meta,
                 })
                 for child in parsed["child_sitemaps"]:
                     c_loc = child["loc"]
@@ -682,7 +689,8 @@ class SitemapExtractor:
                     "error_message": "",
                     "classification": "VALID",
                     # additive per-sitemap hygiene stats (used by the on-page sitemap audit)
-                    "kind": "URLSET", "size_bytes": len(body), "duplicates": 0, "rejected": 0,
+                    "kind": "URLSET", "duplicates": 0, "rejected": 0, "child_sitemap_count": 0,
+                    **fetch_meta,
                 }
                 sitemap_sources.append(src_rec)
 

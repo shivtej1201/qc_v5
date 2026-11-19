@@ -643,11 +643,21 @@ async def onpage_start_upload(file: UploadFile = File(...), name: str = Form("On
     return _onpage_call(onpage.start, name, urls, preset, overrides, primary_domain)
 
 
+class OnPageIssueStatus(BaseModel):
+    status: str
+    note: str = ""
+
+
 @app.get("/api/on-page/audits/{job_id}")
 async def onpage_detail(job_id: str):
     d = _onpage_call(onpage.describe, job_id)
     d["stats"] = await db.get_on_page_audit_stats(job_id)
+    d["progress"] = onpage.progress(job_id, d["stats"])
     d["health"] = onpage.health_score(job_id)
+    try:
+        d["score"] = onpage.score(job_id)
+    except KeyError:
+        d["score"] = None
     d["log_tail"] = onpage.log_tail(job_id, 15)
     return d
 
@@ -655,6 +665,70 @@ async def onpage_detail(job_id: str):
 @app.post("/api/on-page/audits/{job_id}/stop")
 async def onpage_stop(job_id: str):
     return _onpage_call(onpage.stop, job_id)
+
+
+@app.post("/api/on-page/audits/{job_id}/pause")
+async def onpage_pause(job_id: str):
+    return _onpage_call(onpage.pause, job_id)
+
+
+@app.post("/api/on-page/audits/{job_id}/cancel")
+async def onpage_cancel(job_id: str):
+    return _onpage_call(onpage.cancel, job_id)
+
+
+@app.get("/api/on-page/audits/{job_id}/progress")
+async def onpage_progress(job_id: str):
+    _onpage_call(onpage.describe, job_id)
+    stats = await db.get_on_page_audit_stats(job_id)
+    return {"lifecycle": onpage.lifecycle(job_id), **onpage.progress(job_id, stats)}
+
+
+@app.get("/api/on-page/audits/{job_id}/score")
+async def onpage_score(job_id: str):
+    try:
+        return _onpage_call(onpage.score, job_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "Score not calculated yet (it is computed when the report is built)")
+        raise
+
+
+@app.patch("/api/on-page/audits/{job_id}/issues/{issue_key}/status")
+async def onpage_issue_status(job_id: str, issue_key: str, body: OnPageIssueStatus):
+    return _onpage_call(onpage.set_issue_status, job_id, issue_key, body.status, body.note)
+
+
+def _explorer_args(limit: int, offset: int, order: str):
+    if limit < 1 or limit > 500 or offset < 0:
+        raise HTTPException(400, "limit must be 1-500 and offset >= 0")
+    if order not in ("asc", "desc"):
+        raise HTTPException(400, "order must be asc or desc")
+
+
+@app.get("/api/on-page/audits/{job_id}/urls")
+async def onpage_urls(job_id: str, status_bucket: Optional[str] = None, crawl_state: Optional[str] = None,
+                      q: Optional[str] = None, sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+    _explorer_args(limit, offset, order)
+    return await asyncio.to_thread(_onpage_call, onpage.urls, job_id, status_bucket, crawl_state, q, sort, order, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/links")
+async def onpage_links(job_id: str, scope: Optional[str] = None, url_type: Optional[str] = None,
+                       status_bucket: Optional[str] = None, source_page: Optional[str] = None, q: Optional[str] = None,
+                       sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+    _explorer_args(limit, offset, order)
+    return await asyncio.to_thread(_onpage_call, onpage.links, job_id, scope, url_type, status_bucket, source_page, q,
+                                   sort, order, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/images")
+async def onpage_images(job_id: str, internal_external: Optional[str] = None, status_bucket: Optional[str] = None,
+                        alt: Optional[str] = None, source_page: Optional[str] = None, q: Optional[str] = None,
+                        sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+    _explorer_args(limit, offset, order)
+    return await asyncio.to_thread(_onpage_call, onpage.images, job_id, internal_external, status_bucket, alt,
+                                   source_page, q, sort, order, offset, limit)
 
 
 @app.post("/api/on-page/audits/{job_id}/resume")
@@ -675,10 +749,18 @@ async def onpage_issue_overview(job_id: str):
 
 @app.get("/api/on-page/audits/{job_id}/issues")
 async def onpage_issues(job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
-                        category: Optional[str] = None, q: Optional[str] = None, offset: int = 0, limit: int = 100):
+                        category: Optional[str] = None, q: Optional[str] = None, status: Optional[str] = None,
+                        page_url: Optional[str] = None, sort: str = "", order: str = "asc",
+                        offset: int = 0, limit: int = 100):
     if severity and severity not in ("HIGH", "MEDIUM", "LOW", "INFO"):
         raise HTTPException(400, "severity must be HIGH, MEDIUM, LOW or INFO")
-    return _onpage_call(onpage.issues, job_id, severity, issue_type, category, q, offset, limit)
+    if status and status.upper() not in ("OPEN", "IN_PROGRESS", "VERIFIED", "RESOLVED", "DISMISSED"):
+        raise HTTPException(400, "status must be OPEN, IN_PROGRESS, VERIFIED, RESOLVED or DISMISSED")
+    if status or page_url or sort or order != "asc":
+        _explorer_args(limit, offset, order)
+        return await asyncio.to_thread(_onpage_call, onpage.issues_db, job_id, severity, issue_type, category, status,
+                                       q, page_url, sort, order, offset, limit)
+    return await asyncio.to_thread(_onpage_call, onpage.issues, job_id, severity, issue_type, category, q, offset, limit)
 
 
 @app.get("/api/on-page/audits/{job_id}/pages")
@@ -906,7 +988,7 @@ async def update_job_remediation(job_id: str, remediation_id: str, body: Remedia
     if not re.match(r'^[a-zA-Z0-9_\-]+$', remediation_id):
         raise HTTPException(status_code=400, detail="Invalid remediation ID format")
         
-    allowed_statuses = {"OPEN", "IN_PROGRESS", "RESOLVED", "DISMISSED", "NEEDS_REVIEW"}
+    allowed_statuses = {"OPEN", "IN_PROGRESS", "VERIFIED", "RESOLVED", "DISMISSED", "NEEDS_REVIEW"}
     status_upper = body.status.strip().upper()
     if status_upper not in allowed_statuses:
         raise HTTPException(
