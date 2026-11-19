@@ -62,6 +62,84 @@ ON_PAGE_IMAGE_SCHEMA_SQL = """
         PRIMARY KEY (job_id, normalized_url)
     );
     CREATE INDEX IF NOT EXISTS idx_opivc_state ON on_page_image_validation_cache(job_id, validation_state);
+
+    -- SEO / technical-SEO facts: one row per parsed 2xx HTML sitemap page (seo_audit.page_facts)
+    CREATE TABLE IF NOT EXISTS on_page_seo_pages (
+        job_id TEXT NOT NULL,
+        source_page_url TEXT NOT NULL,
+        final_url TEXT,
+        title TEXT DEFAULT '',
+        title_length INTEGER DEFAULT 0,
+        title_count INTEGER DEFAULT 0,
+        meta_description TEXT DEFAULT '',
+        meta_description_length INTEGER DEFAULT 0,
+        meta_description_count INTEGER DEFAULT 0,
+        h1_count INTEGER DEFAULT 0,
+        h1_text TEXT DEFAULT '',
+        h2_count INTEGER DEFAULT 0,
+        heading_skips TEXT DEFAULT '',
+        meta_robots TEXT DEFAULT '',
+        x_robots_tag TEXT DEFAULT '',
+        indexable INTEGER DEFAULT 1,
+        noindex INTEGER DEFAULT 0,
+        nofollow INTEGER DEFAULT 0,
+        html_lang TEXT,
+        has_viewport INTEGER DEFAULT 0,
+        has_charset INTEGER DEFAULT 0,
+        meta_refresh TEXT DEFAULT '',
+        canonical_outside_head INTEGER DEFAULT 0,
+        jsonld_blocks INTEGER DEFAULT 0,
+        jsonld_invalid INTEGER DEFAULT 0,
+        schema_types TEXT DEFAULT '',
+        og_title TEXT DEFAULT '',
+        og_description TEXT DEFAULT '',
+        og_image TEXT DEFAULT '',
+        twitter_card TEXT DEFAULT '',
+        word_count INTEGER DEFAULT 0,
+        content_hash TEXT DEFAULT '',
+        hreflang_count INTEGER DEFAULT 0,
+        hreflang_json TEXT DEFAULT '[]',
+        hreflang_x_default INTEGER DEFAULT 0,
+        insecure_resources INTEGER DEFAULT 0,
+        insecure_examples TEXT DEFAULT '',
+        internal_links INTEGER DEFAULT 0,
+        external_links INTEGER DEFAULT 0,
+        internal_nofollow_links INTEGER DEFAULT 0,
+        url_length INTEGER DEFAULT 0,
+        checked_at TIMESTAMP,
+        PRIMARY KEY (job_id, source_page_url)
+    );
+
+    -- Sitemap provenance when an audit is built from sitemaps (sitemap_config): one row per page URL
+    CREATE TABLE IF NOT EXISTS on_page_sitemap_entries (
+        job_id TEXT NOT NULL,
+        normalized_url TEXT NOT NULL,
+        sitemap_url TEXT DEFAULT '',
+        lastmod TEXT DEFAULT '',
+        changefreq TEXT DEFAULT '',
+        priority REAL,
+        PRIMARY KEY (job_id, normalized_url)
+    );
+    CREATE INDEX IF NOT EXISTS idx_opse_sitemap ON on_page_sitemap_entries(job_id, sitemap_url);
+
+    -- every sitemap file fetched for the audit (index and urlset), with fetch + hygiene stats
+    CREATE TABLE IF NOT EXISTS on_page_sitemap_sources (
+        job_id TEXT NOT NULL,
+        sitemap_url TEXT NOT NULL,
+        parent_sitemap_url TEXT DEFAULT '',
+        depth INTEGER DEFAULT 0,
+        kind TEXT DEFAULT '',
+        status TEXT DEFAULT '',
+        http_status INTEGER,
+        classification TEXT DEFAULT '',
+        urls_listed INTEGER DEFAULT 0,
+        duplicates INTEGER DEFAULT 0,
+        rejected INTEGER DEFAULT 0,
+        size_bytes INTEGER DEFAULT 0,
+        selected INTEGER DEFAULT 1,
+        error_message TEXT DEFAULT '',
+        PRIMARY KEY (job_id, sitemap_url)
+    );
 """
 
 ON_PAGE_IMAGE_ALTERS = (

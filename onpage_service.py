@@ -13,6 +13,7 @@ API down and every run is checkpointed/resumable. This module owns:
 Dependency-light on purpose (no psutil/httpx imports) so the API process stays lean.
 """
 import csv
+import ipaddress
 import json
 import os
 import re
@@ -23,6 +24,9 @@ import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from seo_audit import SEO_CATEGORIES
+from sitemap_config import SitemapConfigStore
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 JOB_ID_RE = re.compile(r"^onpage_[a-f0-9]{12}$")
@@ -78,6 +82,20 @@ def estimate_duration(pages: int, rps: float, images_on_primary: bool = False,
     }
 
 
+def _domain_of(url: str) -> str:
+    """Registrable-ish domain for the shared rate budget; IP hosts are used as-is."""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "gov", "edu"):
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
 class AuditConflict(Exception):
     pass
 
@@ -94,6 +112,7 @@ class OnPageAuditService:
         self._issue_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         os.makedirs(self.base_dir, exist_ok=True)
         os.makedirs(self.reports_dir, exist_ok=True)
+        self.sitemaps = SitemapConfigStore(self.base_dir, allow_local=allow_local)
 
     # ------------------------------------------------------------------ paths / metadata
     def _dir(self, job_id: str) -> str:
@@ -170,7 +189,8 @@ class OnPageAuditService:
         meta = self._meta(job_id)
         res = self.result(job_id) or {}
         return {
-            **{k: meta.get(k) for k in ("job_id", "name", "created_at", "preset", "config", "url_count", "primary_domain")},
+            **{k: meta.get(k) for k in ("job_id", "name", "created_at", "preset", "config", "url_count", "primary_domain",
+                                        "source")},
             "run_state": self.run_state(job_id),
             "final_qc_status": res.get("final_qc_status"),
             "crawl_seconds": res.get("crawl_seconds"),
@@ -190,7 +210,8 @@ class OnPageAuditService:
 
     def start(self, name: str, urls: Iterable[str], preset: str = "conservative",
               overrides: Optional[Dict[str, Any]] = None, primary_domain: Optional[str] = None,
-              extra_args: Optional[List[str]] = None) -> Dict[str, Any]:
+              extra_args: Optional[List[str]] = None, sitemap_meta: Optional[Dict[str, Any]] = None,
+              source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if preset not in PRESETS:
             raise ValueError(f"unknown preset {preset!r}; choose one of {sorted(PRESETS)}")
         clean, seen = [], set()
@@ -209,9 +230,7 @@ class OnPageAuditService:
             config["max_rps"] = config["target_rps"]
         domain = (primary_domain or config.get("primary_domain") or "").strip().lower()
         if not domain:
-            host = (urllib.parse.urlsplit(clean[0]).hostname or "").lower()
-            parts = host.split(".")
-            domain = ".".join(parts[-3:]) if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "gov", "edu") else ".".join(parts[-2:]) if len(parts) >= 2 else host
+            domain = _domain_of(clean[0])
         config["primary_domain"] = domain
         busy = self._active_for_domain(domain)
         if busy:
@@ -222,12 +241,56 @@ class OnPageAuditService:
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "urls.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(clean))
+        if sitemap_meta:
+            SitemapConfigStore._write_json(os.path.join(d, "sitemap_meta.json"), sitemap_meta)
         meta = {"job_id": job_id, "name": (name or "On-page audit").strip()[:120], "created_at": _utc(),
                 "preset": preset, "config": config, "url_count": len(clean), "primary_domain": domain,
-                "extra_args": list(extra_args or [])}
+                "extra_args": list(extra_args or []), "source": source or {"type": "url_list"}}
         self._save_meta(job_id, meta)
         self._spawn(job_id, meta)
         return self.describe(job_id)
+
+    # ------------------------------------------------------------------ sitemap-driven audits
+    async def discover_sitemaps(self, inputs: List[str], max_urls: int = 50000) -> Dict[str, Any]:
+        return await self.sitemaps.discover(inputs, max_urls=max_urls)
+
+    def sitemap_selection(self, import_id: str, **sel) -> Dict[str, Any]:
+        snap = self.sitemaps.load_import(import_id)
+        res = self.sitemaps.select(snap, **sel)
+        res.pop("urls")
+        pages = res["selected_count"]
+        res["estimate"] = {p: estimate_duration(pages, PRESETS[p]["target_rps"]) for p in PRESETS}
+        return res
+
+    def start_from_sitemap(self, import_id: str, name: str = "", preset: str = "conservative",
+                           overrides: Optional[Dict[str, Any]] = None, primary_domain: Optional[str] = None,
+                           profile_id: Optional[str] = None, **sel) -> Dict[str, Any]:
+        snap = self.sitemaps.load_import(import_id)
+        chosen = self.sitemaps.select(snap, **sel)
+        if not chosen["urls"]:
+            raise ValueError("the sitemap selection is empty: widen the sitemaps or patterns")
+        meta = self.sitemaps.audit_meta(snap, chosen)
+        source = {"type": "sitemap", "import_id": import_id, "inputs": snap["inputs"], "profile_id": profile_id,
+                  "selected_sitemaps": len(chosen["selected_sitemaps"]), "include": chosen["include"],
+                  "exclude": chosen["exclude"], "max_pages": chosen["max_pages"], "excluded": chosen["excluded"]}
+        return self.start(name or f"Sitemap audit · {urllib.parse.urlsplit(snap['inputs'][0]).hostname}",
+                          [r["u"] for r in chosen["urls"]], preset=preset, overrides=overrides,
+                          primary_domain=primary_domain, sitemap_meta=meta, source=source)
+
+    async def run_profile(self, profile_id: str) -> Dict[str, Any]:
+        """Re-discover the profile's sitemaps (fresh URLs/lastmod) and start an audit with its saved selection."""
+        prof = self.sitemaps.get_profile(profile_id)
+        snap = await self.discover_sitemaps(prof["inputs"])
+        known = {s["sitemap_url"] for s in snap["sources"]}
+        selected = [u for u in prof.get("selected_sitemaps") or [] if u in known]
+        job = self.start_from_sitemap(snap["import_id"], name=prof["name"], preset=prof.get("preset", "conservative"),
+                                      overrides=prof.get("overrides"), profile_id=profile_id,
+                                      primary_domain=prof.get("primary_domain") or None,
+                                      selected_sitemaps=selected, include=prof.get("include"),
+                                      exclude=prof.get("exclude"), max_pages=prof.get("max_pages", 0))
+        self.sitemaps.touch_profile(profile_id, {"job_id": job["job_id"], "at": _utc(), "import_id": snap["import_id"],
+                                                 "pages": job.get("url_count")})
+        return {"import": snap, "audit": job}
 
     def _spawn(self, job_id: str, meta: Dict[str, Any]):
         d = self._dir(job_id)
@@ -251,6 +314,8 @@ class OnPageAuditService:
                 args += [flag, str(c[k])]
         if self.allow_local:
             args.append("--allow-local")
+        if os.path.exists(os.path.join(d, "sitemap_meta.json")):
+            args += ["--sitemap-meta", os.path.join(d, "sitemap_meta.json")]
         args += meta.get("extra_args") or []
         log = open(os.path.join(d, "worker.log"), "a", encoding="utf-8")
         log.write(f"\n=== {_utc()} start {' '.join(args[1:4])} ...\n")
@@ -324,6 +389,59 @@ class OnPageAuditService:
                 "top_high_urls": [{"url": u, "issue_type": t, "relationships": n} for (u, t), n in top_urls]}
         self._issue_cache[job_id] = (mtime, data)
         return data
+
+    def seo_overview(self, job_id: str) -> Dict[str, Any]:
+        """SEO coverage (from 15), SEO issue categories (from 13) and sitemap health (from 16)."""
+        p15 = self._csv(job_id, "15_seo_page_audit.csv")
+        n = 0
+        c = {k: 0 for k in ("indexable", "noindex", "title_ok", "desc_ok", "desc_present", "single_h1", "viewport",
+                            "lang", "schema", "schema_invalid", "og_complete", "hreflang", "mixed_content", "thin")}
+        words = 0
+        with open(p15, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                n += 1
+                gi = lambda k: int(r.get(k) or 0)
+                c["indexable"] += gi("indexable")
+                c["noindex"] += gi("noindex")
+                c["title_ok"] += 30 <= gi("title_length") <= 60
+                c["desc_present"] += gi("meta_description_length") > 0
+                c["desc_ok"] += 70 <= gi("meta_description_length") <= 160
+                c["single_h1"] += gi("h1_count") == 1
+                c["viewport"] += gi("has_viewport")
+                c["lang"] += bool((r.get("html_lang") or "").strip())
+                c["schema"] += gi("jsonld_blocks") > 0 and gi("jsonld_invalid") == 0
+                c["schema_invalid"] += gi("jsonld_invalid") > 0
+                c["og_complete"] += bool(r.get("og_title") and r.get("og_description") and r.get("og_image"))
+                c["hreflang"] += gi("hreflang_count") > 0
+                c["mixed_content"] += gi("insecure_resources") > 0
+                c["thin"] += gi("word_count") < 200
+                words += gi("word_count")
+        pct = lambda k: round(100.0 * c[k] / n, 1) if n else None
+        # score: share of pages passing each core check, equally weighted
+        core = [pct("indexable"), pct("title_ok"), pct("desc_present"), pct("single_h1"), pct("viewport"),
+                pct("lang"), (100 - pct("mixed_content")) if n else None, (100 - pct("schema_invalid")) if n else None,
+                (100 - pct("thin")) if n else None]
+        core = [v for v in core if v is not None]
+        score = round(sum(core) / len(core)) if core else None
+        ov = self.issue_overview(job_id)
+        cats: Dict[str, Dict[str, Any]] = {}
+        for t in ov["types"]:
+            if t["category"] not in SEO_CATEGORIES:
+                continue
+            cat = cats.setdefault(t["category"], {"category": t["category"], "issues": 0, "pages": 0, "types": []})
+            cat["issues"] += t["relationships"]
+            cat["pages"] = max(cat["pages"], t["source_pages_affected"])
+            cat["types"].append({k: t[k] for k in ("severity", "issue_type", "relationships", "source_pages_affected",
+                                                   "recommended_action")})
+        sitemaps = []
+        try:
+            with open(self._csv(job_id, "16_sitemap_audit.csv"), newline="", encoding="utf-8") as f:
+                sitemaps = list(csv.DictReader(f))
+        except FileNotFoundError:
+            pass
+        return {"pages": n, "score": score, "counts": c, "avg_words": round(words / n) if n else 0,
+                "coverage": {k: pct(k) for k in c},
+                "categories": sorted(cats.values(), key=lambda x: -x["issues"]), "sitemaps": sitemaps}
 
     def issues(self, job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
                category: Optional[str] = None, search: Optional[str] = None, offset: int = 0,

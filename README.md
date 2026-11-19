@@ -1,7 +1,8 @@
 # QC V5 — Website Audit Intelligence
 
-Audit every sitemap page of a large site — every link, canonical, hreflang, iframe and image on it — validate each
-unique URL exactly once, and turn the results into a prioritized, actionable issue report. Built for
+Audit every sitemap page of a large site — every link, canonical, hreflang, iframe and image on it, plus a deep
+SEO / technical-SEO and sitemap-health review — validate each unique URL exactly once, and turn the results into a
+prioritized, actionable issue report. Built for
 **10,000 pages in 15–20 minutes** without tripping the site's WAF.
 
 ![QC V5 Command Center](docs/design/screenshots/command-center-live.png)
@@ -14,9 +15,17 @@ unique URL exactly once, and turn the results into a prioritized, actionable iss
   adaptive rate control with Akamai cooldowns, SSRF checks on every redirect hop, robots.txt honored.
 - **Validate once, keep every relationship**: three-level dedup (same page, across pages, in flight) for links and
   images; a sitemap page linked from other pages is satisfied by its own fetch.
-- **Actionable reports**: 54 issue types with severity and a specific recommended fix, plus per-type and per-page
-  summaries; 14 streamed CSVs in one ZIP.
-- **Trustworthy numbers**: a 28-check trust gate reconciles every CSV against the database; any mismatch fails the run.
+- **Sitemap configuration**: point it at a sitemap, robots.txt or just a domain; it follows sitemap indexes and
+  `.gz` files, shows the sitemap tree with per-file health, and lets you pick sitemaps, include/exclude URL patterns
+  and a page cap. Save the setup as a **profile** and re-run it any time (each run re-reads the sitemaps).
+- **SEO and technical-SEO deep dive** (no extra requests, collected during the same single parse): titles,
+  descriptions, H1s, duplicates across pages, noindex/nofollow (meta and `X-Robots-Tag`), canonical placement, meta
+  refresh, viewport, `lang`, JSON-LD validity, Open Graph, thin and duplicate content, mixed content, hreflang codes,
+  self-reference, x-default and reciprocity, URL hygiene, orphan pages, internal pages missing from the sitemap, and
+  sitemap lastmod/duplicate/size checks.
+- **Actionable reports**: ~100 issue types with severity and a specific recommended fix, plus per-type and per-page
+  summaries; 16 streamed CSVs in one ZIP.
+- **Trustworthy numbers**: a 31-check trust gate reconciles every CSV against the database; any mismatch fails the run.
 - **Resumable**: stop and resume any time; API restarts don't interrupt audits.
 
 ## Quick start
@@ -25,8 +34,9 @@ unique URL exactly once, and turn the results into a prioritized, actionable iss
 ./start.sh            # Windows: start.bat — creates a venv, installs requirements + Chromium, starts the server
 ```
 
-Open <http://127.0.0.1:8002/dashboard/> → **New audit** → paste or upload your sitemap URLs → choose a speed preset
-(the wizard shows the predicted duration) → **Launch**. The classic console stays at <http://127.0.0.1:8002/>.
+Open <http://127.0.0.1:8002/dashboard/> → **New audit** → **From sitemap** (enter a sitemap, robots.txt or domain →
+**Discover sitemaps** → pick sitemaps / patterns), or paste / upload URLs → choose a speed preset (the wizard shows the
+predicted duration) → **Launch**. Saved profiles live under **Sitemaps**. The classic console stays at <http://127.0.0.1:8002/>.
 
 Command line (same engine, same reports):
 
@@ -36,7 +46,8 @@ python run_on_page_audit.py --urls sitemap_urls.txt --job-id onpage_10k --primar
   --host-budget cms-assets.bajajfinserv.in=20 --out-dir reports/onpage
 ```
 
-Re-run with the same `--job-id` to resume. `python run_on_page_audit.py -h` lists every option.
+Re-run with the same `--job-id` to resume. `--sitemap-meta` (written by the dashboard) adds sitemap provenance for
+the sitemap report; `--no-seo` skips the SEO page facts. `python run_on_page_audit.py -h` lists every option.
 
 ## Speed: what decides 15–20 minutes
 
@@ -59,8 +70,10 @@ pages. Measure the real ceiling from your network with `bench/live_edge_matrix.p
 | `01_summary.csv` | Totals, rates, issue counts by severity, reconciliation + integrity status |
 | `12_issues.csv` | One row per problem: severity, type, page, element, URL, anchor/alt, status, detail, **recommended action** |
 | `13_issue_summary.csv` · `14_page_issue_summary.csv` | Per issue type (unique URLs, pages affected) · per page, worst first |
+| `15_seo_page_audit.csv` | One row per 2xx HTML page: indexability, robots directives, title/description/H1, headings, lang, viewport, structured data, Open Graph, word count, content hash, hreflang, mixed content, link counts |
+| `16_sitemap_audit.csv` | One row per sitemap file: fetch status, URLs, duplicates, size, and pages audited / 2xx / redirected / errors / noindex / non-canonical / lastmod problems, health |
 | `02`–`10` | Source pages, every link relationship, unique URL validations, every image placement, unique image validations, broken links, redirects, broken images, external links |
-| `11_reconciliation.csv` | The 28 trust-gate checks with expected/actual values |
+| `11_reconciliation.csv` | The 31 trust-gate checks with expected/actual values |
 
 ## Documentation
 
@@ -77,7 +90,9 @@ onpage_service.py         audit lifecycle, presets/estimates, insights, report a
 run_on_page_audit.py      audit worker CLI (engine + CSV/ZIP package)
 on_page_audit_engine.py   crawl + validation pipeline, rate control, checkpoints
 on_page_issue_rules.py    issue types, severity, recommended actions
-on_page_csv_packager.py   streaming reports + trust gate
+on_page_csv_packager.py   streaming reports + trust gate (incl. cross-page SEO + sitemap reports)
+seo_audit.py              SEO / technical-SEO page facts and rules
+sitemap_config.py         sitemap discovery, selection, saved profiles (builds on sitemap_extractor.py)
 html_parser.py · url_normalizer.py · request_errors.py · on_page_schema.py
 job_manager.py · daemon.py · checker.py · db.py      classic bulk URL-status pipeline
 frontend/dashboard/       Command Center (ES modules, design tokens, vendored Three.js)
@@ -93,7 +108,8 @@ test_*.py                 test suites
 python -m pytest -q --ignore=test_container.py --ignore=test_ex.py --ignore=test_html.py --ignore=test_js.py
 ```
 
-Key suites: `test_on_page_url_image_audit.py` (extraction, dedup, issues, reports), `test_onpage_dashboard_api.py`
+Key suites: `test_on_page_url_image_audit.py` (extraction, dedup, issues, reports), `test_seo_sitemap_audit.py`
+(SEO rules, sitemap discovery/selection/profiles, end-to-end SEO + sitemap reports), `test_onpage_dashboard_api.py`
 (service + API end-to-end), `test_dashboard_ui.py` (real-browser UI smoke), `test_url_status_large_volume.py`
 (125K URLs). The four ignored files are scratch scripts that browse live sites. In a sandbox without internet/DNS,
 17 pre-existing tests fail for that reason alone; they pass where public DNS is available.

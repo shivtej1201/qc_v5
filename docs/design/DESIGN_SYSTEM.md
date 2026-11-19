@@ -40,10 +40,16 @@ toggle persisted per browser).
 | Insight | Icon + title + one-sentence finding; kinds: danger, warning, info, success. |
 | Severity donut, bar list, area chart | Dependency-free SVG; animated once per view. |
 | Issue explorer | Severity segmented control (opens on HIGH), issue-type select, debounced search, paging; each row shows URL, the page it's on, anchor/alt text, status, hop count, detail and fix. |
-| Wizard | Pages (paste or file) → Speed (presets, rate slider, live estimate) → Launch. |
+| Wizard | Pages (**from sitemap**, paste or file) → Speed (presets, rate slider, live estimate) → Launch. Sitemap mode: discover, sitemap tree with health tags (index, URLs, duplicates, lastmod, robots, HTTP errors), checkboxes per sitemap, include/exclude patterns, page cap, live selection preview with "left out because…", save as profile. |
+| SEO panel | SEO score gauge (green ≥ 80), coverage bars (share of pages passing each check), issues grouped by area as chips (click → issue explorer filtered to that type), sitemap health table. |
+| Profiles table | Saved sitemap configurations: selection summary, speed, last run (links to the audit), Run now / Review & run / Delete. |
+| Tag | Small pill for metadata in dense lists; neutral, warn (amber) and bad (red) variants. |
 | State pill | RUNNING (pulsing), COMPLETED/PASS, STOPPED/PARTIAL, FAILED. |
 
 ![Issue explorer](screenshots/issue-explorer.png)
+![Sitemap configuration](screenshots/wizard-sitemap.png)
+![SEO panel](screenshots/seo-panel.png)
+![Sitemap profiles](screenshots/sitemaps-profiles.png)
 ![New audit wizard](screenshots/new-audit-wizard.png)
 
 ## Accessibility

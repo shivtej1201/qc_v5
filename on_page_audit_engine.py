@@ -19,6 +19,7 @@ from classifier import Classifier
 from config import settings
 from diagnostics_403 import Diagnostics403
 from html_parser import Parser
+from seo_audit import SEO_COLUMNS, page_facts as seo_page_facts
 from status_classifier import StatusClassifier
 from url_normalizer import URLNormalizer
 
@@ -626,6 +627,7 @@ class OnPageAuditEngine:
         discard_body_limit: int = 256 * 1024,
         primary_hosts: Optional[List[str]] = None,
         audit_images: bool = True,
+        audit_seo: bool = True,
         image_concurrency: int = 10,
         image_discard_body_limit: int = 64 * 1024,
         max_connections: Optional[int] = None,
@@ -665,6 +667,7 @@ class OnPageAuditEngine:
         self.discard_body_limit = discard_body_limit
         self.primary_hosts = {h.lower().strip() for h in (primary_hosts or []) if h and h.strip()}
         self.audit_images = audit_images
+        self.audit_seo = audit_seo
         self.image_concurrency = max(1, int(image_concurrency))
         self.image_discard_body_limit = image_discard_body_limit
         self.max_connections = max_connections
@@ -1487,6 +1490,7 @@ class OnPageAuditEngine:
             "html_bytes": html_bytes,
             "html_truncated": html_truncated,
             "content_length": int(resp_headers.get("content-length")) if str(resp_headers.get("content-length", "")).isdigit() else None,
+            "x_robots_tag": str(resp_headers.get("x-robots-tag", "") or "")[:300],
         }
 
     def _exec_with_retry(self, fn):
@@ -1572,6 +1576,13 @@ class OnPageAuditEngine:
                 """,
                 source_updates,
             )
+            seo_rows = [su["_seo"] for su in source_updates if su.get("_seo")]
+            if seo_rows:
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO on_page_seo_pages ({', '.join(SEO_COLUMNS)}) "
+                    f"VALUES ({', '.join(':' + c for c in SEO_COLUMNS)})",
+                    seo_rows,
+                )
             # Mirror classifications into QC V5 source_classifications
             self.conn.executemany(
                 """
@@ -2579,20 +2590,24 @@ class OnPageAuditEngine:
         Queued-but-unstarted destinations stay PENDING in the DB and are rescheduled on resume."""
         self._stop_requested = True
 
-    def _parse_and_classify(self, src_url: str, final_url: str, html: str):
-        """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title."""
+    def _parse_and_classify(self, src_url: str, final_url: str, html: str, seo_ctx: Optional[Tuple[str, str]] = None):
+        """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title, images and
+        the SEO signals. seo_ctx=(x_robots_tag, checked_at) requests the SEO row (2xx HTML pages only)."""
         raw_occ, rels, parser = extract_on_page_urls(src_url, final_url, html)
         raw_img, img_rels = 0, []
         if self.audit_images:
             source_host = (urllib.parse.urlsplit(final_url or src_url).hostname or "").lower()
             raw_img, img_rels = extract_on_page_images(parser, source_host)   # same Parser instance
+        seo = None
+        if seo_ctx is not None:
+            seo = seo_page_facts(self.job_id, src_url, final_url, parser, rels, seo_ctx[0], seo_ctx[1])
         t1, t2, _ = self.classifier.extract_meta_tags(html[:32768], parser=None)
         title = " ".join((parser.title or "").split())[:300]
         if t1 and t2:
-            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title
+            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title, seo
         clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
         return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
-                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title)
+                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title, seo)
 
     def performance_summary(self) -> Dict[str, Any]:
         m = self.metrics
@@ -2992,10 +3007,16 @@ class OnPageAuditEngine:
                         extracted_rels: List[Dict[str, Any]] = []
                         raw_img, extracted_imgs = 0, []
                         page_title = ""
+                        seo_row = None
                         if html:
+                            ctype = str(fetch_res.get("content_type") or "").lower()
+                            seo_ctx = None
+                            if (self.audit_seo and src_http is not None and 200 <= src_http <= 299
+                                    and (not ctype or "html" in ctype)):
+                                seo_ctx = (fetch_res.get("x_robots_tag") or "", now_iso)
                             (raw_occ, extracted_rels, biz, pt, clf_method, tag_1, tag_2,
-                             raw_img, extracted_imgs, page_title) = await loop.run_in_executor(
-                                parse_pool, self._parse_and_classify, src_url, final_src_url, html
+                             raw_img, extracted_imgs, page_title, seo_row) = await loop.run_in_executor(
+                                parse_pool, self._parse_and_classify, src_url, final_src_url, html, seo_ctx
                             )
                         else:
                             clf_res = self.classifier.classify_from_html(src_url, final_src_url, "")
@@ -3148,6 +3169,7 @@ class OnPageAuditEngine:
                             "attempts": int(fetch_res.get("attempts") or 0),
                             "remark": fetch_res["remark"],
                             "checked_at": now_iso,
+                            "_seo": seo_row,   # written in the same transaction as the page
                         }
                         self._rels_discovered += len(rel_rows)
                         self._img_rels_discovered += len(img_rows)

@@ -469,13 +469,40 @@ onpage = OnPageAuditService(db_path=db.db_path, allow_local=getattr(settings, "A
                             reports_dir=os.environ.get("QC_ONPAGE_REPORTS_DIR") or None)
 
 
+class OnPageSitemapSelection(BaseModel):
+    import_id: str
+    selected_sitemaps: Optional[List[str]] = None
+    include: Optional[List[str]] = None
+    exclude: Optional[List[str]] = None
+    max_pages: int = 0
+    include_robots_blocked: bool = False
+
+
 class OnPageStartRequest(BaseModel):
     name: str = "On-page audit"
     urls: Optional[List[str]] = None
-    sitemap_import_id: Optional[str] = None
+    sitemap_import_id: Optional[str] = None      # classic /api/sitemaps import (selected URLs)
+    sitemap: Optional[OnPageSitemapSelection] = None   # dashboard sitemap config (/api/on-page/sitemaps)
     preset: str = "conservative"
     overrides: Optional[Dict[str, Any]] = None
     primary_domain: Optional[str] = None
+
+
+class OnPageSitemapDiscoverRequest(BaseModel):
+    inputs: List[str]
+    max_urls: int = 50000
+
+
+class OnPageSitemapProfile(BaseModel):
+    name: str
+    inputs: List[str]
+    primary_domain: Optional[str] = None
+    selected_sitemaps: Optional[List[str]] = None
+    include: Optional[List[str]] = None
+    exclude: Optional[List[str]] = None
+    max_pages: int = 0
+    preset: str = "conservative"
+    overrides: Optional[Dict[str, Any]] = None
 
 
 def _onpage_call(fn, *a, **k):
@@ -509,8 +536,76 @@ async def onpage_list():
     return {"audits": jobs}
 
 
+@app.post("/api/on-page/sitemaps/discover")
+async def onpage_sitemap_discover(req: OnPageSitemapDiscoverRequest):
+    """Fetch + parse sitemaps (from sitemap URLs, robots.txt or a domain) into a reusable import snapshot."""
+    if not req.inputs or len(req.inputs) > 20:
+        raise HTTPException(400, "Provide 1-20 sitemap URLs, robots.txt URLs or domains")
+    try:
+        return await onpage.discover_sitemaps(req.inputs, max_urls=min(req.max_urls, settings.MAX_URLS_PER_JOB))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/on-page/sitemaps/{import_id}")
+async def onpage_sitemap_import(import_id: str):
+    return _onpage_call(lambda i: onpage.sitemaps.describe_import(onpage.sitemaps.load_import(i)), import_id)
+
+
+@app.post("/api/on-page/sitemaps/{import_id}/preview")
+async def onpage_sitemap_preview(import_id: str, sel: OnPageSitemapSelection):
+    return _onpage_call(onpage.sitemap_selection, import_id, selected_sitemaps=sel.selected_sitemaps,
+                        include=sel.include, exclude=sel.exclude, max_pages=sel.max_pages,
+                        include_robots_blocked=sel.include_robots_blocked)
+
+
+@app.get("/api/on-page/sitemap-profiles")
+async def onpage_profiles():
+    return {"profiles": onpage.sitemaps.list_profiles()}
+
+
+@app.post("/api/on-page/sitemap-profiles")
+async def onpage_profile_create(p: OnPageSitemapProfile):
+    return _onpage_call(onpage.sitemaps.save_profile, p.dict())
+
+
+@app.put("/api/on-page/sitemap-profiles/{profile_id}")
+async def onpage_profile_update(profile_id: str, p: OnPageSitemapProfile):
+    return _onpage_call(onpage.sitemaps.save_profile, p.dict(), profile_id)
+
+
+@app.delete("/api/on-page/sitemap-profiles/{profile_id}")
+async def onpage_profile_delete(profile_id: str):
+    _onpage_call(onpage.sitemaps.delete_profile, profile_id)
+    return {"status": "deleted"}
+
+
+@app.post("/api/on-page/sitemap-profiles/{profile_id}/run")
+async def onpage_profile_run(profile_id: str):
+    """Re-discover the profile's sitemaps and launch an audit with its saved selection."""
+    try:
+        return await onpage.run_profile(profile_id)
+    except AuditConflict as e:
+        raise HTTPException(409, str(e))
+    except KeyError:
+        raise HTTPException(404, "Unknown profile")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/on-page/audits/{job_id}/seo")
+async def onpage_seo(job_id: str):
+    return _onpage_call(onpage.seo_overview, job_id)
+
+
 @app.post("/api/on-page/audits")
 async def onpage_start(req: OnPageStartRequest):
+    if req.sitemap:
+        sm = req.sitemap
+        return _onpage_call(onpage.start_from_sitemap, sm.import_id, name=req.name, preset=req.preset,
+                            overrides=req.overrides, primary_domain=req.primary_domain,
+                            selected_sitemaps=sm.selected_sitemaps, include=sm.include, exclude=sm.exclude,
+                            max_pages=sm.max_pages, include_robots_blocked=sm.include_robots_blocked)
     urls = list(req.urls or [])
     if req.sitemap_import_id:
         urls += await db.get_selected_urls_for_crawl(req.sitemap_import_id)

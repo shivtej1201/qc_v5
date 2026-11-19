@@ -21,7 +21,8 @@ ZIP_FILES = sorted([
     "01_summary.csv", "02_source_page_audit.csv", "03_url_audit.csv", "04_unique_url_validation.csv",
     "05_image_audit.csv", "06_unique_image_validation.csv", "07_broken_urls.csv", "08_redirect_urls.csv",
     "09_broken_images.csv", "10_external_urls.csv", "11_reconciliation.csv",
-    "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv",
+    "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv", "15_seo_page_audit.csv",
+    "16_sitemap_audit.csv",
 ])
 
 
@@ -244,7 +245,9 @@ def test_end_to_end_url_image_dedup_validation_and_csv_zip():
         one("/img/fake.png", "IMAGE_CONTENT_TYPE_MISMATCH", "HIGH")
         one("/img/fake.png", "MISSING_ALT", "MEDIUM")
         assert len([r for r in iss if r["issue_type"] == "INVALID_URL"]) == N_SRC
-        assert not [r for r in iss if r["normalized_url"] == f"{b}/product/123"], "healthy URL must raise no issue"
+        healthy = [r for r in iss if r["normalized_url"] == f"{b}/product/123"]
+        # a healthy link raises no link issue; it is a live internal page missing from the sitemap (one row per URL)
+        assert [r["issue_type"] for r in healthy] == ["NOT_IN_SITEMAP"], healthy
         nf = by[(f"{b}/nf", "NOT_FOUND")][0]
         assert nf["anchor_or_alt_text"] == "c" and nf["source_page_url"].startswith(f"{b}/p/") and nf["http_status"] == "404"
         summ = {r["issue_type"]: r for r in read_csv(os.path.join(w, "13_issue_summary.csv"))}

@@ -1,4 +1,5 @@
 from html.parser import HTMLParser
+import hashlib
 import urllib.parse
 from config import settings
 from typing import List, Dict, Any
@@ -69,6 +70,29 @@ class Parser(HTMLParser):
         self.current_anchor = None
         self.current_on_page_anchor = None
         
+        # SEO / technical-SEO signals, collected in the SAME pass (no second parse)
+        self.title_count = 0
+        self.meta_desc_count = 0
+        self.html_lang = None              # None = no <html lang>, '' = empty attribute
+        self.has_viewport = False
+        self.has_charset = False
+        self.meta_robots: List[str] = []   # content of <meta name=robots|googlebot>
+        self.meta_refresh = ""
+        self.meta_props: Dict[str, str] = {}   # og:* / twitter:* (first value wins)
+        self.h1s: List[str] = []
+        self.heading_counts = [0] * 7
+        self.heading_skips: List[str] = []     # e.g. 'h2->h4'
+        self._last_heading = 0
+        self._h1_buf = None
+        self.jsonld_blocks: List[str] = []
+        self._jsonld_buf = None
+        self._jsonld_bytes = 0
+        self.canonical_outside_head = 0
+        self.insecure_resources: List[str] = []   # http:// scripts, stylesheets, iframes (images added later)
+        self.word_count = 0
+        self._text_hash = hashlib.blake2b(digest_size=12)
+        self._skip_depth = 0
+
         self.path = []
         self.ignored_elements = ('header', 'footer', 'nav')
         self.preferred_selectors = ('main', 'article') # simplified preferred
@@ -86,6 +110,27 @@ class Parser(HTMLParser):
             self.in_head = True
         elif tag == 'title' and self.in_head:
             self.current_tag = 'title'
+            self.title_count += 1
+        elif tag == 'html':
+            if 'lang' in attr_dict and self.html_lang is None:
+                self.html_lang = str(attr_dict.get('lang') or '').strip()[:35]
+        elif tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            lvl = int(tag[1])
+            self.heading_counts[lvl] += 1
+            if self._last_heading and lvl > self._last_heading + 1 and len(self.heading_skips) < 10:
+                self.heading_skips.append(f"h{self._last_heading}->h{lvl}")
+            self._last_heading = lvl
+            if lvl == 1:
+                self._h1_buf = []
+        elif tag in ('script', 'style', 'noscript', 'template'):
+            self._skip_depth += 1
+            if tag == 'script':
+                stype = str(attr_dict.get('type') or '').strip().lower()
+                if stype == 'application/ld+json' and len(self.jsonld_blocks) < 50:
+                    self._jsonld_buf = []
+                src = str(attr_dict.get('src') or '').strip()
+                if src.lower().startswith('http://') and len(self.insecure_resources) < 50:
+                    self.insecure_resources.append('script:' + src[:300])
             
         elif tag == 'base':
             href = attr_dict.get('href')
@@ -96,7 +141,23 @@ class Parser(HTMLParser):
             self.meta_tags.append(attr_dict)
             name = attr_dict.get('name', '')
             if name == 'description':
-                self.meta_desc = attr_dict.get('content', '')
+                self.meta_desc_count += 1
+                if self.meta_desc_count == 1:
+                    self.meta_desc = attr_dict.get('content', '')
+            elif name in ('robots', 'googlebot'):
+                self.meta_robots.append(str(attr_dict.get('content') or '').strip().lower()[:200])
+            elif name == 'viewport':
+                self.has_viewport = True
+            if 'charset' in attr_dict:
+                self.has_charset = True
+            http_equiv = str(attr_dict.get('http-equiv') or '').strip().lower()
+            if http_equiv == 'content-type' and 'charset' in str(attr_dict.get('content') or '').lower():
+                self.has_charset = True
+            elif http_equiv == 'refresh' and not self.meta_refresh:
+                self.meta_refresh = str(attr_dict.get('content') or '').strip()[:200] or '0'
+            prop = str(attr_dict.get('property') or name or '').strip().lower()
+            if (prop.startswith('og:') or prop.startswith('twitter:')) and prop not in self.meta_props:
+                self.meta_props[prop] = str(attr_dict.get('content') or '').strip()[:300]
             meta_key = (attr_dict.get('property') or name or '').strip().lower()
             if meta_key in self._img_meta:
                 content = (attr_dict.get('content') or '').strip()
@@ -108,7 +169,12 @@ class Parser(HTMLParser):
             rel_tokens = set(rel.split()) if rel else set()
             link_href = attr_dict.get('href', '').strip()
             hreflang = attr_dict.get('hreflang', '').strip()
+            if 'stylesheet' in rel_tokens and link_href.lower().startswith('http://') \
+                    and len(self.insecure_resources) < 50:
+                self.insecure_resources.append('stylesheet:' + link_href[:300])
             if 'canonical' in rel_tokens:
+                if not self.in_head:
+                    self.canonical_outside_head += 1
                 self.canonical = link_href
                 if link_href:
                     self.canonicals.append(link_href)
@@ -184,6 +250,8 @@ class Parser(HTMLParser):
                 })
         elif tag == 'iframe':
             src = attr_dict.get('src', '').strip()
+            if src.lower().startswith('http://') and len(self.insecure_resources) < 50:
+                self.insecure_resources.append('iframe:' + src[:300])
             if src:
                 self.all_on_page_urls.append({
                     'href': src,
@@ -262,6 +330,15 @@ class Parser(HTMLParser):
             self.in_head = False
         elif tag == 'title':
             self.current_tag = None
+        elif tag == 'h1' and self._h1_buf is not None:
+            if len(self.h1s) < 10:
+                self.h1s.append(' '.join(''.join(self._h1_buf).split())[:200])
+            self._h1_buf = None
+        elif tag in ('script', 'style', 'noscript', 'template'):
+            self._skip_depth = max(0, self._skip_depth - 1)
+            if tag == 'script' and self._jsonld_buf is not None:
+                self.jsonld_blocks.append(''.join(self._jsonld_buf))
+                self._jsonld_buf = None
             
         if tag == 'a':
             if self.current_anchor:
@@ -277,6 +354,17 @@ class Parser(HTMLParser):
     def handle_data(self, data):
         if self.current_tag == 'title':
             self.title += data
+        if self._skip_depth:
+            if self._jsonld_buf is not None and self._jsonld_bytes < 512 * 1024:
+                self._jsonld_buf.append(data)
+                self._jsonld_bytes += len(data)
+        elif not self.in_head and self.current_tag != 'title':
+            words = data.split()
+            if words:
+                self.word_count += len(words)
+                self._text_hash.update((' '.join(words).lower() + ' ').encode('utf-8', 'ignore'))
+            if self._h1_buf is not None:
+                self._h1_buf.append(data)
         if self.current_anchor:
             self.current_anchor['text'] += data
         if self.current_on_page_anchor:
@@ -330,6 +418,11 @@ class Parser(HTMLParser):
         
         body = [img for img in self.images if img['container_type'] == 'body']
         return body
+
+    @property
+    def content_hash(self) -> str:
+        """Hash of the visible body text (whitespace/case-normalized); '' when the page has no text."""
+        return self._text_hash.hexdigest() if self.word_count else ''
 
     def get_all_on_page_urls(self) -> List[Dict[str, Any]]:
         """

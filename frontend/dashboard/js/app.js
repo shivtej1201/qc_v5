@@ -8,7 +8,9 @@ const ACTIVE = new Set(["RUNNING", "STOPPING"]);
 const CSV_FILES = ["01_summary.csv", "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv",
   "02_source_page_audit.csv", "03_url_audit.csv", "04_unique_url_validation.csv", "05_image_audit.csv",
   "06_unique_image_validation.csv", "07_broken_urls.csv", "08_redirect_urls.csv", "09_broken_images.csv",
-  "10_external_urls.csv", "11_reconciliation.csv"];
+  "10_external_urls.csv", "11_reconciliation.csv", "15_seo_page_audit.csv", "16_sitemap_audit.csv"];
+const CAT_LABEL = { ON_PAGE_SEO: "On-page SEO", TECH_SEO: "Technical SEO", CONTENT: "Content", INTERNATIONAL: "International (hreflang)",
+  URL_STRUCTURE: "URL structure", SITEMAP: "Sitemap" };
 const SEV_COLOR = { HIGH: "var(--sev-high)", MEDIUM: "var(--sev-medium)", LOW: "var(--sev-low)", INFO: "var(--sev-info)" };
 
 // ------------------------------------------------------------------ live history (instantaneous rates)
@@ -41,6 +43,7 @@ function nav(active) {
   return h("nav", { class: "nav", "aria-label": "Primary" },
     link("#/", "overview", "Command Center", "overview"),
     link("#/audits", "audits", "Audits", "audits"),
+    link("#/sitemaps", "sitemap", "Sitemaps", "sitemaps"),
     link("/", "classic", "Classic console", "classic"));
 }
 
@@ -66,8 +69,8 @@ function toggleTheme() {
   scene?.setTheme();
 }
 
-function newAuditButton() {
-  return h("button", { class: "btn btn-primary", onclick: () => openWizard() }, icon("plus"), "New audit");
+function newAuditButton(opts) {
+  return h("button", { class: "btn btn-primary", onclick: () => openWizard(opts) }, icon("plus"), "New audit");
 }
 
 function schedule(fn, anyActive) {
@@ -262,7 +265,7 @@ async function viewAudits(token) {
   schedule(() => render(), audits.some((a) => ACTIVE.has(a.run_state)));
 }
 
-const issueState = { severity: "HIGH", issue_type: "", q: "", offset: 0, limit: 25 };   // fix-first view by default
+const issueState = { severity: "HIGH", issue_type: "", category: "", q: "", offset: 0, limit: 25 };   // fix-first view by default
 
 async function viewAudit(token, id) {
   const [d, { insights }] = await Promise.all([api.audit(id), api.insights(id)]);
@@ -301,7 +304,7 @@ async function viewAudit(token, id) {
 
   let reportSection;
   if (d.package_available) {
-    const [ov, pagesRes] = await Promise.all([api.overview(id), api.pages(id, 12)]);
+    const [ov, pagesRes, seo] = await Promise.all([api.overview(id), api.pages(id, 12), api.seo(id).catch(() => null)]);
     if (token !== viewToken) return;
     reportSection = [
       h("div", { class: "grid g-3" },
@@ -312,6 +315,7 @@ async function viewAudit(token, id) {
             h("div", {}, h("div", { class: "row" }, h("span", { class: "sev sev-HIGH" }, u.issue_type), h("span", { class: "spacer" }), h("b", {}, fmt.n(u.relationships))),
               h("span", { class: "url mono dim", title: u.url }, u.url))))
             : h("p", { class: "muted" }, "No HIGH issues."))),
+      seoSection(seo),
       issueExplorer(id, ov),
       h("div", { class: "grid g-2" },
         h("section", { class: "card reveal" }, h("h2", {}, "Worst pages"), worstPages(pagesRes.pages)),
@@ -320,7 +324,7 @@ async function viewAudit(token, id) {
     ];
   } else {
     reportSection = [h("section", { class: "card reveal" }, h("h2", {}, "Report"),
-      h("p", { class: "muted" }, running ? "The issue report (14 CSVs + ZIP) is built automatically when the crawl finishes."
+      h("p", { class: "muted" }, running ? "The issue report (16 CSVs + ZIP, including the SEO and sitemap audits) is built automatically when the crawl finishes."
         : "No report: the audit has not finished. Resume it to complete the crawl and build the report."))];
   }
   const content = h("div", { class: "stack" },
@@ -341,6 +345,54 @@ async function viewAudit(token, id) {
   schedule(() => render(), running);
 }
 
+function seoSection(seo) {
+  if (!seo || !seo.pages) return null;
+  const cov = seo.coverage || {};
+  // every bar is the share of pages that PASS the check (inverted for "bad" counters)
+  const covRow = (label, key, invert = false) => {
+    const v = cov[key] ?? 0, good = invert ? 100 - v : v;
+    const n = invert ? seo.pages - seo.counts[key] : seo.counts[key];
+    return { label, value: good, display: `${fmt.dec(good, 0)}%`, color: good >= 90 ? "var(--ok)" : good >= 60 ? "var(--sev-medium)" : "var(--sev-high)",
+      title: `${fmt.n(n)} of ${fmt.n(seo.pages)} pages pass` };
+  };
+  const coverage = barList([
+    covRow("indexable", "indexable"), covRow("title 30–60", "title_ok"), covRow("meta description", "desc_present"),
+    covRow("single H1", "single_h1"), covRow("mobile viewport", "viewport"), covRow("html lang", "lang"),
+    covRow("structured data", "schema"), covRow("Open Graph", "og_complete"),
+    covRow("200+ words", "thin", true), covRow("no mixed content", "mixed_content", true)], { max: 100 });
+  const cats = (seo.categories || []).map((c) => h("div", { class: "seo-cat" },
+    h("div", { class: "row" }, h("b", {}, CAT_LABEL[c.category] || c.category), h("span", { class: "spacer" }),
+      h("span", { class: "dim" }, `${fmt.n(c.issues)} issue(s)`)),
+    h("div", { class: "seo-types" }, c.types.slice(0, 5).map((t) => h("button", {
+      class: "chip-btn", title: t.recommended_action,
+      onclick: () => { issueState.severity = ""; issueState.issue_type = t.issue_type; issueState.offset = 0;
+        const ex = document.querySelector("[aria-label='Issue explorer']"); ex?.scrollIntoView({ behavior: "smooth" }); render(); } },
+      h("span", { class: `dot sev-dot-${t.severity}` }), t.issue_type.replaceAll("_", " ").toLowerCase(), h("b", {}, fmt.n(t.relationships)))))));
+  const sm = seo.sitemaps || [];
+  const smTable = sm.length ? h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "Sitemap"), h("th", {}, "Health"), h("th", {}, "Pages"), h("th", {}, "2xx"),
+      h("th", {}, "Redirect"), h("th", {}, "4xx/5xx"), h("th", {}, "Noindex"), h("th", {}, "Non-canonical"), h("th", {}, "Lastmod issues"))),
+    h("tbody", {}, sm.map((r) => h("tr", {},
+      h("td", {}, h("span", { class: "url mono", title: r.sitemap_url }, r.sitemap_url || "(URL list)"),
+        h("div", { class: "dim" }, [r.kind, r.http_status ? `HTTP ${r.http_status}` : "", r.duplicates !== "0" && r.duplicates ? `${r.duplicates} dup` : ""].filter(Boolean).join(" · "))),
+      h("td", {}, h("span", { class: `pill ${r.health === "OK" ? "st-PASS" : r.health === "FAILED" ? "st-FAILED" : "st-PARTIAL"}` }, r.health)),
+      h("td", { class: "num" }, fmt.n(r.pages_audited)), h("td", { class: "num" }, fmt.n(r.pages_2xx)),
+      h("td", { class: "num" }, fmt.n(r.pages_redirected)), h("td", { class: "num" }, fmt.n(r.pages_4xx_5xx)),
+      h("td", { class: "num" }, fmt.n(r.noindex_pages)), h("td", { class: "num" }, fmt.n(r.non_canonical_pages)),
+      h("td", { class: "num" }, fmt.n(Number(r.lastmod_missing || 0) + Number(r.lastmod_invalid || 0) + Number(r.lastmod_future || 0)))))))) : null;
+  const score = seo.score ?? 0;
+  return h("section", { class: "card reveal", "aria-label": "SEO and technical SEO" },
+    h("div", { class: "card-head" }, h("h2", {}, "SEO & technical SEO"),
+      h("span", { class: "dim", style: { fontSize: "var(--fs-xs)" } }, `${fmt.n(seo.pages)} pages analyzed · ${fmt.n(seo.avg_words)} words on average`)),
+    h("div", { class: "grid seo-grid" },
+      h("div", {}, gauge({ value: score, max: 100, band: [80, 100], label: "SEO score", display: `${score}`,
+        color: score >= 80 ? "var(--ok)" : score >= 60 ? "var(--sev-medium)" : "var(--sev-high)", size: 190 }),
+        h("p", { class: "dim", style: { fontSize: "var(--fs-xs)", textAlign: "center" } }, "Average pass rate of the core checks on every 2xx HTML page.")),
+      h("div", {}, h("h3", {}, "Coverage"), coverage),
+      h("div", {}, h("h3", {}, "Issues by area"), cats.length ? h("div", { class: "seo-cats" }, cats) : h("p", { class: "muted" }, "No SEO issues."))),
+    smTable ? [h("h3", { style: { marginTop: "var(--s-5)" } }, "Sitemap health"), smTable] : null);
+}
+
 function issueExplorer(id, ov) {
   const tableHost = h("div", {});
   const pager = h("div", { class: "row", style: { marginTop: "var(--s-3)" } });
@@ -350,6 +402,9 @@ function issueExplorer(id, ov) {
     e.currentTarget.parentElement.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === e.currentTarget)));
     load();
   } }, label);
+  const cats = [...new Set((ov.types || []).map((t) => t.category))].sort();
+  const catSel = h("select", { "aria-label": "Issue area", onchange: (e) => { issueState.category = e.target.value; issueState.offset = 0; load(); } },
+    h("option", { value: "" }, "All areas"), cats.map((c) => h("option", { value: c, selected: issueState.category === c || null }, CAT_LABEL[c] || c.replaceAll("_", " ").toLowerCase())));
   const typeSel = h("select", { "aria-label": "Issue type", onchange: (e) => { issueState.issue_type = e.target.value; issueState.offset = 0; load(); } },
     h("option", { value: "" }, "All issue types"), [...new Set(types)].map((t) => h("option", { value: t, selected: issueState.issue_type === t || null }, t)));
   let tmr;
@@ -359,7 +414,7 @@ function issueExplorer(id, ov) {
   async function load() {
     clearTimeout(poll);   // the explorer is interactive; do not re-render under the user
     mount(tableHost, h("div", { class: "skeleton", style: { height: "220px" } }));
-    const res = await api.issues(id, { severity: issueState.severity, issue_type: issueState.issue_type, q: issueState.q,
+    const res = await api.issues(id, { severity: issueState.severity, issue_type: issueState.issue_type, category: issueState.category, q: issueState.q,
       offset: issueState.offset, limit: issueState.limit });
     const rows = res.items.map((r) => h("tr", {},
       h("td", {}, h("span", { class: `sev sev-${r.severity}` }, r.severity)),
@@ -382,7 +437,7 @@ function issueExplorer(id, ov) {
     h("div", { class: "card-head" }, h("h2", {}, "Issue explorer"), h("a", { href: api.fileUrl(id, "12_issues.csv") }, "Download all (CSV)")),
     h("div", { class: "filters" }, h("div", { class: "seg", role: "group", "aria-label": "Severity" },
       segBtn("", "All"), segBtn("HIGH", "High"), segBtn("MEDIUM", "Medium"), segBtn("LOW", "Low"), segBtn("INFO", "Info")),
-      typeSel, search),
+      catSel, typeSel, search),
     tableHost, pager);
 }
 
@@ -402,42 +457,148 @@ async function act(fn, ok) {
 }
 
 // ------------------------------------------------------------------ new-audit wizard
-async function openWizard() {
+async function openWizard(opts = {}) {
   const { presets } = await api.presets();
-  const st = { step: 1, mode: "paste", urls: [], file: null, preset: "target", rps: presets.target.target_rps, imagesOnPrimary: false, name: "", domain: "" };
+  const prof = opts.profile || null;
+  const st = { step: 1, mode: opts.mode || (prof ? "sitemap" : "paste"), urls: [], file: null,
+    preset: prof?.preset || "target", rps: prof?.overrides?.target_rps || presets[prof?.preset || "target"].target_rps,
+    imagesOnPrimary: false, name: prof?.name || "", domain: prof?.primary_domain || "",
+    sm: { inputs: (prof?.inputs || []).join("\n"), imp: null, selected: null, include: (prof?.include || []).join("\n"),
+      exclude: (prof?.exclude || []).join("\n"), maxPages: prof?.max_pages || 0, preview: null, busy: false, error: "",
+      save: !!prof, profileName: prof?.name || "", profileId: prof?.id || null, wanted: prof?.selected_sitemaps || [] } };
   const back = h("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "wiz-title" });
   const close = () => { back.remove(); document.removeEventListener("keydown", esc); };
   const esc = (e) => { if (e.key === "Escape") close(); };
   document.addEventListener("keydown", esc);
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
-  const modal = h("div", { class: "modal" });
+  const modal = h("div", { class: "modal modal-wide" });
   back.append(modal);
   document.body.append(back);
 
-  const count = () => (st.mode === "paste" ? st.urls.length : st.fileCount || 0);
+  const lines = (v) => String(v || "").split(/\n+/).map((x) => x.trim()).filter(Boolean);
+  const count = () => (st.mode === "paste" ? st.urls.length : st.mode === "sitemap" ? st.sm.preview?.selected_count || 0 : st.fileCount || 0);
   let nextBtn = null;
-  const canNext = () => st.step !== 1 || (st.mode === "paste" ? st.urls.length > 0 : !!st.file);
-  // the Continue button must follow the input live (paste / file choice), not only the initial draw
+  const canNext = () => st.step !== 1 || (st.mode === "paste" ? st.urls.length > 0 : st.mode === "sitemap" ? count() > 0 : !!st.file);
+  // the Continue button must follow the input live (paste / file choice / sitemap preview), not only the initial draw
   const refreshNext = () => { if (nextBtn) nextBtn.disabled = !canNext(); };
+
+  // ---- sitemap mode helpers
+  const urlsets = () => (st.sm.imp?.sources || []).filter((s) => s.kind === "URLSET" && s.status !== "FAILED");
+  const selection = () => {
+    const all = urlsets().map((s) => s.sitemap_url);
+    const sel = all.filter((u) => st.sm.selected?.has(u));
+    return { selected_sitemaps: sel.length === all.length ? [] : sel, include: lines(st.sm.include), exclude: lines(st.sm.exclude),
+      max_pages: Number(st.sm.maxPages) || 0 };
+  };
+  let previewHost = null, pvTimer = null;
+  function drawPreview() {
+    if (!previewHost) return;
+    const pv = st.sm.preview;
+    if (!pv) { mount(previewHost, h("div", { class: "dim" }, st.sm.imp ? "Calculating…" : "")); return; }
+    const ex = pv.excluded, why = [["sitemap", "other sitemaps"], ["robots", "robots.txt"], ["include", "not included"], ["exclude", "excluded"], ["cap", "over the cap"]]
+      .filter(([k]) => ex[k]).map(([k, l]) => `${fmt.n(ex[k])} ${l}`);
+    mount(previewHost,
+      h("div", { class: "estimate", style: { marginTop: 0 } },
+        h("div", {}, h("div", { class: "dim" }, "Pages selected"), h("b", {}, fmt.n(pv.selected_count))),
+        h("div", {}, h("div", { class: "dim" }, "Predicted @ target preset"), h("b", {}, `${pv.estimate.target.estimated_minutes} min`)),
+        h("div", { class: "dim", style: { fontSize: "var(--fs-xs)", maxWidth: "300px" } }, why.length ? `Left out: ${why.join(" · ")}` : "Every discovered URL is included.")),
+      pv.sample.length ? h("ul", { class: "sample mono" }, pv.sample.slice(0, 6).map((u) => h("li", { class: "truncate", title: u }, u))) : null);
+  }
+  function schedulePreview() {
+    clearTimeout(pvTimer);
+    if (!st.sm.imp) return;
+    pvTimer = setTimeout(async () => {
+      try { st.sm.preview = await api.sitemapPreview(st.sm.imp.import_id, selection()); st.sm.error = ""; }
+      catch (e) { st.sm.preview = null; st.sm.error = e.message; toast(e.message, "err"); }
+      drawPreview(); refreshNext();
+    }, 250);
+  }
+  async function discover() {
+    const inputs = lines(st.sm.inputs);
+    if (!inputs.length) { toast("Enter a sitemap URL, robots.txt URL or domain", "err"); return; }
+    st.sm.busy = true; st.sm.imp = null; st.sm.preview = null; draw();
+    try {
+      st.sm.imp = await api.discoverSitemaps(inputs);
+      const wanted = new Set(st.sm.wanted || []);
+      st.sm.selected = new Set(urlsets().map((s) => s.sitemap_url).filter((u) => !wanted.size || wanted.has(u)));
+    } catch (e) { toast(e.message, "err"); }
+    st.sm.busy = false; draw(); schedulePreview();
+  }
+  function sitemapStep() {
+    const imp = st.sm.imp;
+    const inputsTa = h("textarea", { rows: 3, style: { minHeight: "76px" }, placeholder: "https://www.example.com/sitemap.xml\nhttps://www.example.com/robots.txt\nexample.com",
+      "aria-label": "Sitemap URLs, robots.txt URLs or domains, one per line", oninput: (e) => { st.sm.inputs = e.target.value; } }, st.sm.inputs);
+    const discoverBtn = h("button", { class: "btn", disabled: st.sm.busy || null, onclick: discover },
+      icon(st.sm.busy ? "refresh" : "sitemap"), st.sm.busy ? "Discovering…" : imp ? "Re-discover" : "Discover sitemaps");
+    const out = [h("div", { class: "field" }, h("label", {}, "Sitemap, robots.txt or domain"), inputsTa,
+      h("div", { class: "row" }, discoverBtn, h("span", { class: "dim", style: { fontSize: "var(--fs-xs)" } },
+        "A domain or robots.txt is resolved through its Sitemap: lines (fallback /sitemap.xml). Indexes and .gz files are followed.")))];
+    if (st.sm.busy) out.push(h("div", { class: "skeleton", style: { height: "140px" } }));
+    if (!imp) return out;
+    const sm = imp.summary;
+    out.push(h("div", { class: "sm-summary" },
+      [["sitemaps", sm.sitemaps], ["unique URLs", sm.unique_urls], ["duplicates", sm.duplicates], ["robots-blocked", sm.robots_blocked],
+        ["failed sitemaps", sm.sitemaps_failed]].map(([l, v]) => h("div", { class: `chip ${l === "failed sitemaps" && v ? "chip-bad" : ""}` }, h("b", {}, fmt.n(v)), h("span", {}, l)))));
+    const tree = h("div", { class: "sm-tree", role: "group", "aria-label": "Sitemaps to include" },
+      imp.sources.map((s) => {
+        const pick = s.kind === "URLSET" && s.status !== "FAILED";
+        const lm = (s.lastmod_missing || 0) + (s.lastmod_invalid || 0) + (s.lastmod_future || 0);
+        const badges = [
+          s.kind === "INDEX" ? h("span", { class: "tag" }, `index · ${fmt.n(s.urls_listed)} sitemaps`) : null,
+          s.status === "FAILED" ? h("span", { class: "tag tag-bad" }, s.http_status ? `HTTP ${s.http_status}` : s.classification) : null,
+          pick ? h("span", { class: "tag" }, `${fmt.n(s.unique_urls)} URLs`) : null,
+          s.duplicates ? h("span", { class: "tag tag-warn" }, `${fmt.n(s.duplicates)} dup`) : null,
+          lm ? h("span", { class: "tag tag-warn", title: `missing ${s.lastmod_missing} · invalid ${s.lastmod_invalid} · future ${s.lastmod_future}` }, `${fmt.n(lm)} lastmod`) : null,
+          s.robots_blocked ? h("span", { class: "tag tag-warn" }, `${fmt.n(s.robots_blocked)} robots`) : null];
+        const cb = pick ? h("input", { type: "checkbox", checked: st.sm.selected.has(s.sitemap_url) || null, "aria-label": `Include ${s.sitemap_url}`,
+          onchange: (e) => { if (e.target.checked) st.sm.selected.add(s.sitemap_url); else st.sm.selected.delete(s.sitemap_url); schedulePreview(); } })
+          : h("span", { class: "sm-nocb", "aria-hidden": "true" }, s.kind === "INDEX" ? "▾" : "×");
+        return h("label", { class: `sm-item ${s.status === "FAILED" ? "failed" : ""}`, style: { paddingLeft: `${8 + 18 * (s.depth || 0)}px` } },
+          cb, h("span", { class: "url mono truncate", title: s.sitemap_url }, s.sitemap_url), h("span", { class: "spacer" }), badges);
+      }));
+    const ta = (key, label, ph) => h("div", { class: "field" }, h("label", {}, label),
+      h("textarea", { rows: 2, placeholder: ph, oninput: (e) => { st.sm[key] = e.target.value; schedulePreview(); } }, st.sm[key]));
+    previewHost = h("div", {});
+    out.push(tree,
+      h("div", { class: "grid g-3 sm-filters" },
+        ta("include", "Include URLs matching", "/loans/\n/blog/*"), ta("exclude", "Exclude URLs matching", "/tag/\n*?page=*"),
+        h("div", { class: "field" }, h("label", {}, "Max pages (0 = all)"),
+          h("input", { type: "number", min: 0, step: 100, value: st.sm.maxPages, oninput: (e) => { st.sm.maxPages = e.target.value; schedulePreview(); } }))),
+      previewHost,
+      h("div", { class: "row sm-profile" },
+        h("label", { class: "row dim", style: { fontSize: "var(--fs-sm)" } },
+          h("input", { type: "checkbox", checked: st.sm.save || null, onchange: (e) => { st.sm.save = e.target.checked; draw(); } }),
+          st.sm.profileId ? "Update the saved profile" : "Save as a reusable sitemap profile"),
+        st.sm.save ? h("input", { type: "text", value: st.sm.profileName, placeholder: "Profile name, e.g. Loans weekly",
+          "aria-label": "Profile name", oninput: (e) => { st.sm.profileName = e.target.value; } }) : null));
+    drawPreview();
+    return out;
+  }
+
   function draw() {
     const steps = h("div", { class: "steps" }, ["1 · Pages", "2 · Speed", "3 · Launch"].map((s, i) => h("span", { "aria-current": st.step === i + 1 ? "step" : null }, s)));
     let body;
     if (st.step === 1) {
-      const ta = h("textarea", { placeholder: "https://www.example.com/page-1\nhttps://www.example.com/page-2\n…", "aria-label": "Source page URLs, one per line",
-        oninput: (e) => { st.urls = e.target.value.split(/\s+/).map((u) => u.trim()).filter((u) => /^https?:\/\//i.test(u)); info.textContent = `${fmt.n(st.urls.length)} valid URL(s)`; refreshNext(); } },
-        st.urls.join("\n"));
-      const info = h("div", { class: "dim" }, `${fmt.n(st.urls.length)} valid URL(s)`);
-      const fileInput = h("input", { type: "file", accept: ".txt,.csv,.xlsx", class: "sr-only", id: "wiz-file", onchange: (e) => pick(e.target.files[0]) });
-      const dz = h("label", { class: "dropzone", for: "wiz-file" }, st.file ? `${st.file.name} (${fmt.n(st.file.size / 1024)} KB)` : "Drop a .txt / .csv / .xlsx file here, or click to choose");
-      const pick = (f) => { if (!f) return; st.file = f; st.fileCount = 0; dz.textContent = `${f.name} (${fmt.n(f.size / 1024)} KB)`; refreshNext();
-        if (f.name.endsWith(".txt")) f.text().then((t) => { st.fileCount = t.split(/\r?\n/).filter((l) => l.trim()).length; dz.textContent += ` · ${fmt.n(st.fileCount)} lines`; }); };
-      dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
-      dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
-      dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("drag"); pick(e.dataTransfer.files[0]); });
-      body = [h("div", { class: "seg", role: "group" },
-        h("button", { "aria-pressed": String(st.mode === "paste"), onclick: () => { st.mode = "paste"; draw(); } }, "Paste URLs"),
-        h("button", { "aria-pressed": String(st.mode === "file"), onclick: () => { st.mode = "file"; draw(); } }, "Upload file")),
-        st.mode === "paste" ? h("div", { class: "field" }, h("label", {}, "Sitemap source pages"), ta, info) : h("div", {}, fileInput, dz)];
+      const modeBtn = (m, label) => h("button", { "aria-pressed": String(st.mode === m), onclick: () => { st.mode = m; draw(); } }, label);
+      const seg = h("div", { class: "seg", role: "group" }, modeBtn("sitemap", "From sitemap"), modeBtn("paste", "Paste URLs"), modeBtn("file", "Upload file"));
+      if (st.mode === "sitemap") {
+        body = [seg, ...sitemapStep()];
+      } else if (st.mode === "paste") {
+        const info = h("div", { class: "dim" }, `${fmt.n(st.urls.length)} valid URL(s)`);
+        const ta = h("textarea", { placeholder: "https://www.example.com/page-1\nhttps://www.example.com/page-2\n…", "aria-label": "Source page URLs, one per line",
+          oninput: (e) => { st.urls = e.target.value.split(/\s+/).map((u) => u.trim()).filter((u) => /^https?:\/\//i.test(u)); info.textContent = `${fmt.n(st.urls.length)} valid URL(s)`; refreshNext(); } },
+          st.urls.join("\n"));
+        body = [seg, h("div", { class: "field" }, h("label", {}, "Sitemap source pages"), ta, info)];
+      } else {
+        const fileInput = h("input", { type: "file", accept: ".txt,.csv,.xlsx", class: "sr-only", id: "wiz-file", onchange: (e) => pick(e.target.files[0]) });
+        const dz = h("label", { class: "dropzone", for: "wiz-file" }, st.file ? `${st.file.name} (${fmt.n(st.file.size / 1024)} KB)` : "Drop a .txt / .csv / .xlsx file here, or click to choose");
+        const pick = (f) => { if (!f) return; st.file = f; st.fileCount = 0; dz.textContent = `${f.name} (${fmt.n(f.size / 1024)} KB)`; refreshNext();
+          if (f.name.endsWith(".txt")) f.text().then((t) => { st.fileCount = t.split(/\r?\n/).filter((l) => l.trim()).length; dz.textContent += ` · ${fmt.n(st.fileCount)} lines`; }); };
+        dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+        dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+        dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("drag"); pick(e.dataTransfer.files[0]); });
+        body = [seg, h("div", {}, fileInput, dz)];
+      }
     } else if (st.step === 2) {
       const estBox = h("div", { class: "estimate" }, h("div", { class: "skeleton", style: { width: "220px", height: "40px" } }));
       const refresh = async () => {
@@ -468,11 +629,12 @@ async function openWizard() {
           h("input", { type: "text", id: "wiz-domain", value: st.domain, placeholder: "auto-detected from the URLs, e.g. bajajfinserv.in", oninput: (e) => { st.domain = e.target.value; } })),
         h("div", { class: "estimate" }, h("div", {}, h("div", { class: "dim" }, "Pages"), h("b", {}, count() ? fmt.n(count()) : "from file")),
           h("div", {}, h("div", { class: "dim" }, "Preset"), h("b", {}, presets[st.preset].label)),
-          h("div", {}, h("div", { class: "dim" }, "Rate"), h("b", {}, `${st.rps} req/s`)))];
+          h("div", {}, h("div", { class: "dim" }, "Rate"), h("b", {}, `${st.rps} req/s`)),
+          st.mode === "sitemap" ? h("div", {}, h("div", { class: "dim" }, "Reports"), h("b", { style: { fontSize: "var(--fs-md)" } }, "links · images · SEO · sitemap")) : null)];
     }
     nextBtn = st.step < 3 ? h("button", { class: "btn btn-primary", disabled: !canNext() || null, onclick: () => { st.step++; draw(); } }, "Continue") : null;
     mount(modal,
-      h("header", {}, h("h2", { id: "wiz-title", style: { margin: 0, fontSize: "var(--fs-lg)" } }, "New on-page audit"), h("span", { class: "spacer" }), steps),
+      h("header", {}, h("h2", { id: "wiz-title", style: { margin: 0, fontSize: "var(--fs-lg)" } }, prof ? `Run profile · ${prof.name}` : "New on-page audit"), h("span", { class: "spacer" }), steps),
       h("div", { class: "body" }, body),
       h("footer", {},
         h("button", { class: "btn btn-ghost", onclick: close }, "Cancel"),
@@ -483,7 +645,16 @@ async function openWizard() {
     try {
       const overrides = { target_rps: st.rps, max_rps: st.rps };
       let job;
-      if (st.mode === "paste") {
+      if (st.mode === "sitemap") {
+        const sel = selection();
+        if (st.sm.save) {
+          const saved = await api.saveProfile({ name: st.sm.profileName || st.name || "Sitemap profile", inputs: lines(st.sm.inputs), ...sel,
+            preset: st.preset, overrides, primary_domain: st.domain || null }, st.sm.profileId);
+          st.sm.profileId = saved.id;
+        }
+        job = await api.start({ name: st.name || st.sm.profileName || "Sitemap audit", preset: st.preset, overrides, primary_domain: st.domain || null,
+          sitemap: { import_id: st.sm.imp.import_id, ...sel } });
+      } else if (st.mode === "paste") {
         job = await api.start({ name: st.name || "On-page audit", urls: st.urls, preset: st.preset, overrides, primary_domain: st.domain || null });
       } else {
         const f = new FormData();
@@ -497,6 +668,49 @@ async function openWizard() {
     } catch (e) { toast(e.message, "err"); }
   }
   draw();
+  if (st.mode === "sitemap" && lines(st.sm.inputs).length) discover();   // profiles: rediscover for fresh URLs/lastmod
+}
+
+// ------------------------------------------------------------------ sitemap profiles
+async function viewSitemaps(token) {
+  const { profiles } = await api.profiles();
+  if (token !== viewToken) return;
+  disposeScene();
+  const actions = [h("button", { class: "btn btn-primary", onclick: () => openWizard({ mode: "sitemap" }) }, icon("plus"), "New sitemap audit")];
+  const rows = profiles.map((p) => h("tr", {},
+    h("td", {}, h("b", {}, p.name), h("div", { class: "dim mono truncate", title: p.inputs.join("\n") }, p.inputs.join(" · "))),
+    h("td", { class: "dim" }, [p.selected_sitemaps?.length ? `${p.selected_sitemaps.length} sitemap(s)` : "all sitemaps",
+      p.include?.length ? `include ${p.include.join(", ")}` : "", p.exclude?.length ? `exclude ${p.exclude.join(", ")}` : "",
+      p.max_pages ? `max ${fmt.n(p.max_pages)}` : ""].filter(Boolean).join(" · ")),
+    h("td", { class: "nowrap" }, p.preset, p.overrides?.target_rps ? h("div", { class: "dim" }, `${p.overrides.target_rps} req/s`) : null),
+    h("td", { class: "nowrap" }, p.last_run ? h("a", { href: `#/audit/${p.last_run.job_id}` }, fmt.ago(p.last_run.at), h("div", { class: "dim" }, `${fmt.n(p.last_run.pages)} pages`)) : h("span", { class: "dim" }, "never")),
+    h("td", { class: "nowrap" },
+      h("button", { class: "btn btn-primary", title: "Re-discover sitemaps and launch with this configuration", onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        try { const r = await api.runProfile(p.id); toast(`Audit started: ${fmt.n(r.audit.url_count)} pages`); go(`#/audit/${r.audit.job_id}`); }
+        catch (err) { toast(err.message, "err"); e.currentTarget.disabled = false; } } }, icon("play"), "Run now"),
+      " ",
+      h("button", { class: "btn", onclick: () => openWizard({ profile: p }) }, "Review & run"),
+      " ",
+      h("button", { class: "btn btn-ghost icon-btn", title: "Delete profile", "aria-label": `Delete profile ${p.name}`, onclick: async () => {
+        if (!confirm(`Delete the profile “${p.name}”? Audits already run are kept.`)) return;
+        await act(() => api.deleteProfile(p.id), "Profile deleted."); } }, icon("trash")))));
+  const content = h("div", { class: "stack" },
+    h("section", { class: "card reveal" }, h("div", { class: "card-head" }, h("h2", {}, "Saved sitemap profiles"),
+      h("span", { class: "dim", style: { fontSize: "var(--fs-xs)" } }, "Each run re-reads the sitemaps, so new pages and lastmod changes are picked up.")),
+      profiles.length ? h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}, "Profile"), h("th", {}, "Selection"), h("th", {}, "Speed"), h("th", {}, "Last run"), h("th", {}, ""))),
+        h("tbody", {}, rows)))
+        : h("div", { class: "empty" }, h("h3", {}, "No saved profiles"),
+          h("p", {}, "Point QC V5 at a sitemap, robots.txt or domain, pick sitemaps and URL patterns, and save it for recurring audits."),
+          actions[0])),
+    h("section", { class: "card reveal" }, h("h2", {}, "What a sitemap audit checks"),
+      h("div", { class: "grid g-3 explain" },
+        [["Sitemap health", "Fetch status of every sitemap and index, duplicates, URLs over the 50,000 limit, lastmod missing / invalid / in the future."],
+          ["Sitemap ↔ site consistency", "Sitemap URLs that redirect, error, are noindex or canonicalize elsewhere; internal pages missing from the sitemap; orphan pages."],
+          ["On-page & technical SEO", "Titles, descriptions, H1s, duplicates, structured data, Open Graph, hreflang reciprocity, mixed content, viewport, lang, thin content."]]
+          .map(([t, d]) => h("div", {}, h("b", {}, t), h("p", { class: "muted" }, d))))));
+  mount(app, shell("sitemaps", "Sitemaps", `${profiles.length} saved profile(s)`, actions, content));
 }
 
 // ------------------------------------------------------------------ router
@@ -514,6 +728,7 @@ async function render() {
     const m = hash.match(/^#\/audit\/(onpage_[a-f0-9]{12})$/);
     if (m) await viewAudit(token, m[1]);
     else if (hash.startsWith("#/audits")) await viewAudits(token);
+    else if (hash.startsWith("#/sitemaps")) await viewSitemaps(token);
     else await viewOverview(token);
   } catch (e) {
     if (token !== viewToken) return;

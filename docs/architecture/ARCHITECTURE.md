@@ -9,7 +9,7 @@ QC V5 audits websites at scale:
 
 | Capability | Entry point | Output |
 |---|---|---|
-| **On-page URL + image audit** (sitemap pages → every link, canonical, hreflang, iframe and image on them) | Command Center (`/dashboard/`), `run_on_page_audit.py`, `/api/on-page/*` | 14 CSVs + ZIP, issue reports, live metrics |
+| **On-page URL + image + SEO audit** (sitemap pages → every link, canonical, hreflang, iframe and image on them; SEO / technical-SEO facts per page; sitemap health) | Command Center (`/dashboard/`), `run_on_page_audit.py`, `/api/on-page/*` | 16 CSVs + ZIP, issue reports, live metrics |
 | **Bulk URL status check** (up to 125K+ URLs from a sheet) | Classic console (`/`), `/api/upload` | one result row per submitted URL |
 | Link / image / API-response audits (Playwright-based) | Classic console | Excel reports |
 
@@ -55,8 +55,10 @@ Design decisions:
 | `run_on_page_audit.py` | Worker CLI: inventory → engine → CSV/ZIP package; graceful stop (SIGTERM or stop-file); result JSON |
 | `on_page_audit_engine.py` | Crawl + validation pipeline, rate control, WAF handling, registries, exact counters, checkpointing |
 | `html_parser.py` | Single-pass HTML parser: links, canonical, hreflang, meta, area, iframe, images (srcset, picture, lazy, og/twitter) |
-| `on_page_issue_rules.py` | 54 issue types → severity, detail, recommended action (pure functions) |
-| `on_page_csv_packager.py` | Streaming reports 01–14, ZIP, 28-check trust gate |
+| `on_page_issue_rules.py` | ~100 issue types → severity, detail, recommended action (pure functions) |
+| `seo_audit.py` | SEO page facts from the single parse (+ `X-Robots-Tag`), single-page SEO rules, hreflang reciprocity, lastmod rules |
+| `sitemap_config.py` | Sitemap discovery (sitemap / robots.txt / domain), import snapshots, selection filters, saved profiles; uses `sitemap_extractor.py` (SSRF per hop, robots, gzip, nested indexes) |
+| `on_page_csv_packager.py` | Streaming reports 01–16 (incl. cross-page SEO checks and per-sitemap health), ZIP, 31-check trust gate |
 | `on_page_schema.py` | Dependency-free image-audit DDL shared by API and worker |
 | `request_errors.py` | Type-based transport error classification shared by checker + engine |
 | `url_normalizer.py` | Normalization (cache key), syntax validation, SSRF checks (DNS/private-IP aware) |
@@ -96,6 +98,9 @@ Design decisions:
 | `on_page_validation_cache` | one row per unique URL per job (validation result, `seeded_by`) | `(job_id, normalized_url)` |
 | `on_page_image_relationships` | one row per page → image → alt text | `(job_id, source_page_url, normalized_image_url, alt_present, alt_text)` |
 | `on_page_image_validation_cache` | one row per unique image per job (status, content-type/length, image issue) | `(job_id, normalized_url)` |
+| `on_page_seo_pages` | one row per parsed 2xx HTML sitemap page: SEO facts (written in the page's transaction) | `(job_id, source_page_url)` |
+| `on_page_sitemap_entries` | sitemap provenance per page URL (sitemap, lastmod, changefreq, priority) | `(job_id, normalized_url)` |
+| `on_page_sitemap_sources` | every sitemap file fetched for the audit (kind, status, URLs, duplicates, size, selected) | `(job_id, sitemap_url)` |
 | `job_url_items` | bulk URL-status: one row per submitted URL | `(job_id, row_no)` |
 
 ## 6. Dashboard API (`/api/on-page/…`)
@@ -109,8 +114,32 @@ Design decisions:
 | `GET audits/{id}/insights` | Smart insights (projection vs target, budget share, WAF, fix-first, biggest wins, reconciliation) |
 | `GET audits/{id}/issues/overview` · `GET audits/{id}/issues?severity=&issue_type=&category=&q=&offset=&limit=` | Issue totals + filtered issue rows |
 | `GET audits/{id}/pages` · `GET audits/{id}/package` · `GET audits/{id}/files/{NN_name.csv}` | Worst pages, ZIP, single CSV |
+| `GET audits/{id}/seo` | SEO score, coverage per check, SEO issues by area, sitemap health rows |
+| `POST sitemaps/discover` `{inputs, max_urls}` | Resolve sitemaps (direct, robots.txt `Sitemap:` lines, or `/sitemap.xml`), fetch + parse the tree → import snapshot (`smi_…`) |
+| `GET sitemaps/{import_id}` · `POST sitemaps/{import_id}/preview` | Snapshot summary · selection preview (count, what was left out and why, sample, duration estimates) |
+| `POST audits` with `sitemap: {import_id, selected_sitemaps, include, exclude, max_pages}` | Start an audit from a sitemap selection (sitemap provenance flows into the reports) |
+| `GET/POST sitemap-profiles` · `PUT/DELETE sitemap-profiles/{id}` · `POST sitemap-profiles/{id}/run` | Saved sitemap configurations; *run* re-discovers and launches |
 
 Errors: 400 invalid input/ids, 404 unknown audit or report not built, 409 domain busy / already running.
+
+## 6a. SEO and sitemap audit
+
+* **Collected during the single parse**: the parser records title(s), meta description(s), robots meta, viewport,
+  charset, `lang`, meta refresh, headings (H1 text, skipped levels), JSON-LD blocks, Open Graph/Twitter tags,
+  canonical placement, `http://` scripts/styles/iframes, visible word count and a normalized content hash. The fetch
+  records `X-Robots-Tag`. No extra HTTP requests. Measured parser cost: +1.0 ms per 140 KB page (6.4 → 7.4 ms), far
+  below the ~83 ms per page the 12 req/s rate budget allows, so audit duration is unchanged.
+* **Single-page rules** (`seo_audit.page_issues`): length/presence/multiplicity checks, noindex/nofollow on a sitemap
+  page, canonical outside `<head>`, mixed content, invalid/missing structured data, thin content, hreflang code validity,
+  self-reference, x-default and conflicts, URL hygiene.
+* **Cross-page rules** (packager, report time): duplicate titles / descriptions / H1 / visible content among
+  indexable self-canonical pages, hreflang reciprocity between audited pages, trailing-slash duplicates, orphan pages
+  (no `<a>` from another audited page), internal 200 HTML pages linked from the site but missing from the sitemap.
+* **Sitemap rules**: failed sitemap files, >50,000 URLs / >50 MB, duplicate entries (within and across files),
+  `<lastmod>` missing / not W3C Datetime / in the future, plus per-sitemap roll-ups of page status, redirects,
+  noindex and non-canonical pages (16_sitemap_audit.csv).
+* **Trust gate additions**: SEO CSV rows = SEO DB rows; every parsed 2xx HTML page has an SEO row; sitemap report
+  pages = source pages.
 
 ## 7. Performance model (why 15–20 min is a rate question)
 

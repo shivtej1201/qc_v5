@@ -21,8 +21,10 @@ def _strip_tag_ns(tag: str) -> str:
 
 class RobotsManager:
     """Caches and evaluates robots.txt policies per domain with SSRF validation."""
-    def __init__(self, http_client: httpx.AsyncClient, user_agent: str = "Mozilla/5.0"):
+    def __init__(self, http_client: httpx.AsyncClient, user_agent: str = "Mozilla/5.0",
+                 allow_local: Optional[bool] = None):
         self.http_client = http_client
+        self.allow_local = getattr(settings, "ALLOW_LOCAL_TESTING", False) if allow_local is None else allow_local
         self.user_agent = user_agent
         self.parsers: Dict[str, Optional[urllib.robotparser.RobotFileParser]] = {}
         self.lock = asyncio.Lock()
@@ -36,7 +38,7 @@ class RobotsManager:
                 return self.parsers[origin]
 
             robots_url = f"{origin}/robots.txt"
-            if not URLNormalizer.is_safe_url(robots_url, allow_local=getattr(settings, "ALLOW_LOCAL_TESTING", False)):
+            if not URLNormalizer.is_safe_url(robots_url, allow_local=self.allow_local):
                 self.parsers[origin] = None
                 return None
 
@@ -120,7 +122,8 @@ class SitemapExtractor:
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LinkAuditorBot/2.0"},
             follow_redirects=False # Manual redirect tracking for SSRF check
         )
-        self.robots_manager = RobotsManager(self.client, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) LinkAuditorBot/2.0")
+        self.robots_manager = RobotsManager(self.client, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) LinkAuditorBot/2.0",
+                                            allow_local=allow_local or None)
         self.semaphore = asyncio.Semaphore(self.concurrency)
 
     async def close(self):
@@ -656,7 +659,8 @@ class SitemapExtractor:
                     "http_status": status_code,
                     "urls_found": urls_found,
                     "error_message": "",
-                    "classification": "VALID"
+                    "classification": "VALID",
+                    "kind": "INDEX", "size_bytes": len(body), "duplicates": 0, "rejected": 0,
                 })
                 for child in parsed["child_sitemaps"]:
                     c_loc = child["loc"]
@@ -668,7 +672,7 @@ class SitemapExtractor:
             else:
                 # Process URLs in urlset
                 urls_found = len(parsed["urls"])
-                sitemap_sources.append({
+                src_rec = {
                     "sitemap_url": current_sitemap,
                     "parent_sitemap_url": parent_sitemap,
                     "depth": depth,
@@ -676,8 +680,11 @@ class SitemapExtractor:
                     "http_status": status_code,
                     "urls_found": urls_found,
                     "error_message": "",
-                    "classification": "VALID"
-                })
+                    "classification": "VALID",
+                    # additive per-sitemap hygiene stats (used by the on-page sitemap audit)
+                    "kind": "URLSET", "size_bytes": len(body), "duplicates": 0, "rejected": 0,
+                }
+                sitemap_sources.append(src_rec)
 
                 for item in parsed["urls"]:
                     raw_url = item["loc"]
@@ -685,17 +692,20 @@ class SitemapExtractor:
                     parsed_item = urllib.parse.urlparse(raw_url)
                     if parsed_item.scheme.lower() not in ["http", "https"]:
                         rejected_count += 1
+                        src_rec["rejected"] += 1
                         continue
 
                     # 2. SSRF Check
                     if not URLNormalizer.is_safe_url(raw_url, allow_local=self.allow_local):
                         rejected_count += 1
+                        src_rec["rejected"] += 1
                         continue
 
                     # 3. Normalize & Deduplicate
                     norm_url = URLNormalizer.normalize(raw_url)
                     if norm_url in extracted_urls_map:
                         duplicate_count += 1
+                        src_rec["duplicates"] += 1
                         continue
 
                     # 4. Check Robots.txt policy

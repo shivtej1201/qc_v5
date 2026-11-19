@@ -31,6 +31,13 @@ export const api = {
   overview: (id) => req("GET", `/api/on-page/audits/${enc(id)}/issues/overview`),
   issues: (id, params) => req("GET", `/api/on-page/audits/${enc(id)}/issues?${new URLSearchParams(params)}`),
   pages: (id, limit = 15) => req("GET", `/api/on-page/audits/${enc(id)}/pages?limit=${limit}`),
+  seo: (id) => req("GET", `/api/on-page/audits/${enc(id)}/seo`),
+  discoverSitemaps: (inputs, maxUrls = 50000) => req("POST", "/api/on-page/sitemaps/discover", { inputs, max_urls: maxUrls }),
+  sitemapPreview: (importId, sel) => req("POST", `/api/on-page/sitemaps/${enc(importId)}/preview`, { import_id: importId, ...sel }),
+  profiles: () => req("GET", "/api/on-page/sitemap-profiles"),
+  saveProfile: (p, id) => (id ? req("PUT", `/api/on-page/sitemap-profiles/${enc(id)}`, p) : req("POST", "/api/on-page/sitemap-profiles", p)),
+  deleteProfile: (id) => req("DELETE", `/api/on-page/sitemap-profiles/${enc(id)}`),
+  runProfile: (id) => req("POST", `/api/on-page/sitemap-profiles/${enc(id)}/run`),
   packageUrl: (id) => `/api/on-page/audits/${enc(id)}/package`,
   fileUrl: (id, name) => `/api/on-page/audits/${enc(id)}/files/${enc(name)}`,
 };

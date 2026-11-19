@@ -81,7 +81,7 @@ def test_dashboard_renders_real_audit_without_errors(live):
                 pg.on("pageerror", lambda e: errors.append(f"pageerror {e}"))
                 pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
                 pg.on("requestfailed", lambda r: errors.append(f"failed {r.url}"))
-                for path in ("/dashboard/#/", "/dashboard/#/audits", f"/dashboard/#/audit/{live['job']}"):
+                for path in ("/dashboard/#/", "/dashboard/#/audits", "/dashboard/#/sitemaps", f"/dashboard/#/audit/{live['job']}"):
                     await pg.goto(live["base"] + path, wait_until="networkidle")
                     await pg.wait_for_timeout(1500)
                     assert not await pg.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"), (theme, path)

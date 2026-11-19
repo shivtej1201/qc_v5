@@ -10,11 +10,14 @@ the CSV row counts. final_qc_status is PASS only if every check passes.
     04_unique_url_validation.csv   05_image_audit.csv              06_unique_image_validation.csv
     07_broken_urls.csv             08_redirect_urls.csv            09_broken_images.csv
     10_external_urls.csv           11_reconciliation.csv           12_issues.csv
-    13_issue_summary.csv           14_page_issue_summary.csv       -> <package_name>.zip
+    13_issue_summary.csv           14_page_issue_summary.csv       15_seo_page_audit.csv
+    16_sitemap_audit.csv           -> <package_name>.zip
 
 12-14 are the actionable layer: every source page / link / image problem with a severity,
 plain-language detail and recommended fix, computed on the SAME streamed pass (no extra scan,
-no extra HTTP requests).
+no extra HTTP requests). 15-16 are the SEO / technical-SEO layer: per-page SEO facts and per-sitemap
+health; their issues (single-page and cross-page: duplicates, hreflang reciprocity, orphans, pages missing
+from the sitemap, lastmod hygiene) go into 12-14 like every other issue.
 """
 import csv
 import json
@@ -28,6 +31,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from on_page_issue_rules import (ACTIONS, BROKEN_IMAGE_TYPES, BROKEN_STATUS_TYPES, SEVERITY_ORDER,
                                   action_for, image_issues, link_issues, source_issues)
 from on_page_schema import ensure_on_page_image_schema
+from seo_audit import (hreflang_reciprocity, lastmod_state, page_issues as seo_page_issues,
+                       url_structure_issues)
+from url_normalizer import URLNormalizer
 
 BROKEN_BUCKETS = ("4xx", "5xx", "Timeout", "DNS/Network", "SSL", "Robots blocked", "WAF blocked", "Other errors")
 # Same rule as on_page_report_packager._is_broken_dest, expressed in SQL over the validation cache alias "c"
@@ -188,11 +194,71 @@ def build_on_page_csv_package(
     }
     issues = IssueWriter(out("12_issues.csv"))
 
+    # per-page facts gathered while streaming 02 (one small entry per page) for SEO + sitemap reports
+    page_info: Dict[str, Dict[str, Any]] = {}
+    sm_agg: Dict[str, Dict[str, int]] = {}
+    slash_groups: Dict[str, List[str]] = {}
+
+    def _sm(key: str) -> Dict[str, int]:
+        a = sm_agg.get(key)
+        if a is None:
+            a = sm_agg[key] = {k: 0 for k in ("pages_audited", "pages_2xx", "pages_redirected", "pages_4xx_5xx",
+                                              "pages_failed_or_blocked", "pages_pending", "noindex_pages",
+                                              "non_canonical_pages", "issues")}
+        return a
+
     def on_source(r: Dict[str, Any]):
-        for cat, t, sev, detail in source_issues(r, canon.get(r["source_page_url"]), anchors.get(r["source_page_url"], 0)):
-            issues.add(cat, t, sev, detail, r["source_page_url"], "SOURCE_PAGE", r["source_page_url"],
+        page = r["source_page_url"]
+        found = source_issues(r, canon.get(page), anchors.get(page, 0))
+        if r["crawl_state"] != "PENDING":
+            found = found + url_structure_issues(page)
+        for cat, t, sev, detail in found:
+            issues.add(cat, t, sev, detail, page, "SOURCE_PAGE", page,
                        r["normalized_source_url"], r.get("page_title"), "", r["http_status"],
                        r["initial_http_status"], r["final_url"], r["redirect_count"], "")
+        sm_key = r.get("source_sitemap") or ""
+        a = _sm(sm_key)
+        a["pages_audited"] += 1
+        a["issues"] += len(found)
+        code, state = r["http_status"], r["crawl_state"]
+        if state == "PENDING":
+            a["pages_pending"] += 1
+        elif state in ("FAILED", "BLOCKED", "TIMED_OUT"):
+            a["pages_failed_or_blocked"] += 1
+        elif code is not None and code >= 400:
+            a["pages_4xx_5xx"] += 1
+        elif code is not None and 200 <= code <= 299:
+            a["pages_2xx"] += 1
+        if int(r.get("redirect_count") or 0) > 0:
+            a["pages_redirected"] += 1
+        non_canon = any(t == "SITEMAP_URL_NOT_CANONICAL" for _, t, _, _ in found)
+        if non_canon:
+            a["non_canonical_pages"] += 1
+        nf = URLNormalizer.normalize(str(r.get("final_url") or "")) if r.get("final_url") else ""
+        page_info[page] = {"ns": r["normalized_source_url"] or "", "nf": nf, "sitemap": sm_key,
+                           "non_canonical": non_canon, "ok": code is not None and 200 <= code <= 299,
+                           "status": code, "final": r.get("final_url"), "title": r.get("page_title")}
+        ns = str(r["normalized_source_url"] or "")
+        slash_groups.setdefault(ns.rstrip("/"), []).append(page)
+
+    seo_rows_for_cross: List[Tuple[str, str, str, str]] = []
+    dupe_eligible: set = set()
+
+    def on_seo(r: Dict[str, Any]):
+        page = r["source_page_url"]
+        info = page_info.get(page, {})
+        found = seo_page_issues(r, {info.get("ns", ""), info.get("nf", "")} - {""})
+        for cat, t, sev, detail in found:
+            issues.add(cat, t, sev, detail, page, "SOURCE_PAGE", page, info.get("ns"), r.get("title"), "",
+                       info.get("status"), None, info.get("final"), None, "")
+        a = _sm(info.get("sitemap", ""))
+        a["issues"] += len(found)
+        if int(r.get("noindex") or 0):
+            a["noindex_pages"] += 1
+        if int(r.get("hreflang_count") or 0):
+            seo_rows_for_cross.append((page, info.get("ns", ""), info.get("nf", ""), r.get("hreflang_json") or "[]"))
+        if int(r.get("indexable") or 0) and not info.get("non_canonical"):
+            dupe_eligible.add(page)
 
     def on_url(r: Dict[str, Any]):
         for cat, t, sev, detail in link_issues(r):
@@ -318,6 +384,163 @@ def build_on_page_csv_package(
               c.final_url, c.status_bucket, {URL_VALSRC_SQL}, c.remark
          {url_join} AND r.found_url_scope = 'EXTERNAL' ORDER BY r.id""", J)
 
+    # ---------------------------------------------------------------- 15 SEO page audit (+ SEO issues)
+    seo_cols = ["source_page_url", "final_url", "http_status", "indexable", "noindex", "nofollow", "meta_robots",
+                "x_robots_tag", "title", "title_length", "title_count", "meta_description", "meta_description_length",
+                "meta_description_count", "h1_count", "h1_text", "h2_count", "heading_skips", "html_lang",
+                "has_viewport", "has_charset", "meta_refresh", "canonical_outside_head", "jsonld_blocks",
+                "jsonld_invalid", "schema_types", "og_title", "og_description", "og_image", "twitter_card",
+                "word_count", "content_hash", "hreflang_count", "hreflang_x_default", "hreflang_json",
+                "insecure_resources", "insecure_examples", "internal_links", "external_links",
+                "internal_nofollow_links", "url_length", "checked_at"]
+    files["15_seo_page_audit.csv"] = _stream(conn, out("15_seo_page_audit.csv"), seo_cols,
+        "SELECT " + ", ".join("s.http_status" if c == "http_status" else "p." + c for c in seo_cols) +
+        """ FROM on_page_seo_pages p JOIN on_page_source_pages s
+                ON s.job_id = p.job_id AND s.source_page_url = p.source_page_url
+             WHERE p.job_id = ? ORDER BY s.source_page_id""", J, on_row=on_seo)
+
+    def cross(cat: str, itype: str, sev: str, page: str, detail: str, text: Any = ""):
+        info = page_info.get(page, {})
+        issues.add(cat, itype, sev, detail, page, "SOURCE_PAGE", page, info.get("ns"), text, "",
+                   info.get("status"), None, info.get("final"), None, "")
+        if info:
+            _sm(info["sitemap"])["issues"] += 1
+
+    # cross-page duplicates (indexable, self-canonical pages only: canonicalized duplicates are intended)
+    for col, itype, sev, extra in (("title", "DUPLICATE_TITLE", "MEDIUM", "title != ''"),
+                                   ("meta_description", "DUPLICATE_META_DESCRIPTION", "LOW", "meta_description != ''"),
+                                   ("h1_text", "DUPLICATE_H1", "LOW", "h1_count = 1 AND h1_text != ''"),
+                                   ("content_hash", "DUPLICATE_CONTENT", "MEDIUM", "content_hash != '' AND word_count >= 50")):
+        groups: Dict[str, List[str]] = {}
+        for val, page in conn.execute(
+                f"""SELECT {col}, source_page_url FROM on_page_seo_pages WHERE job_id = ? AND {extra} AND {col} IN (
+                        SELECT {col} FROM on_page_seo_pages WHERE job_id = ? AND {extra}
+                         GROUP BY {col} HAVING COUNT(*) > 1) ORDER BY {col}, source_page_url""", (job_id, job_id)):
+            if page in dupe_eligible:
+                groups.setdefault(val, []).append(page)
+        for val, pages in groups.items():
+            if len(pages) < 2:
+                continue
+            for pg in pages:
+                other = next(p for p in pages if p != pg)
+                label = "identical visible text" if col == "content_hash" else f"'{str(val)[:80]}'"
+                cross("CONTENT" if col == "content_hash" else "ON_PAGE_SEO", itype, sev, pg,
+                      f"{label} shared by {len(pages)} pages, e.g. {other}", "" if col == "content_hash" else val)
+
+    # hreflang reciprocity between audited pages
+    for pg, target, code in hreflang_reciprocity(seo_rows_for_cross):
+        cross("INTERNATIONAL", "HREFLANG_NOT_RECIPROCAL", "MEDIUM", pg, f"hreflang={code} -> {target} has no return link")
+
+    # trailing-slash duplicates inside the sitemap
+    for key, pages in slash_groups.items():
+        if len(pages) > 1:
+            for pg in pages:
+                cross("URL_STRUCTURE", "TRAILING_SLASH_DUPLICATE", "MEDIUM", pg,
+                      "Listed with and without trailing slash: " + " , ".join(p for p in pages if p != pg)[:200])
+
+    # orphan pages: no <a>/<area> link from ANOTHER audited page (needs 2+ audited pages)
+    ok_pages = [p for p, i in page_info.items() if i.get("ok")]
+    if len(ok_pages) > 1:
+        inbound: Dict[str, Tuple[int, str, str]] = {
+            r[0]: (r[1], r[2], r[3]) for r in conn.execute(
+                """SELECT normalized_found_url, COUNT(DISTINCT source_page_url), MIN(source_page_url), MAX(source_page_url)
+                     FROM on_page_link_relationships
+                    WHERE job_id = ? AND found_url_scope = 'INTERNAL'
+                      AND (found_url_type IN ('ANCHOR', 'AREA') OR link_types LIKE '%"ANCHOR"%' OR link_types LIKE '%"AREA"%')
+                    GROUP BY normalized_found_url""", J)}
+        for pg in ok_pages:
+            info = page_info[pg]
+            linked = False
+            for k in {info["ns"], info["nf"]} - {""}:
+                n, lo, hi = inbound.get(k, (0, "", ""))
+                if n >= 2 or (n == 1 and lo != pg):
+                    linked = True
+                    break
+            if not linked:
+                cross("TECH_SEO", "ORPHAN_PAGE", "LOW", pg,
+                      f"No <a> link to this page from the other {len(page_info) - 1} audited page(s)")
+        del inbound
+
+    # internal 200 HTML pages linked from the site but not in the audited sitemap (one row per unique URL)
+    if page_info:
+        sitemap_norms = {i["ns"] for i in page_info.values()} | {i["nf"] for i in page_info.values()}
+        for url, first_src, reuse in conn.execute(
+                """SELECT c.normalized_url, c.first_seen_source_url, c.reuse_count FROM on_page_validation_cache c
+                    WHERE c.job_id = ? AND c.referenced = 1 AND c.url_scope = 'INTERNAL'
+                      AND c.http_status BETWEEN 200 AND 299 AND COALESCE(c.redirect_count, 0) = 0
+                      AND LOWER(COALESCE(c.content_type, '')) LIKE '%html%'
+                      AND EXISTS (SELECT 1 FROM on_page_link_relationships r WHERE r.job_id = c.job_id
+                                   AND r.normalized_found_url = c.normalized_url
+                                   AND (r.found_url_type IN ('ANCHOR', 'AREA') OR r.link_types LIKE '%"ANCHOR"%'))
+                    ORDER BY c.normalized_url""", J):
+            if url in sitemap_norms:
+                continue
+            info = page_info.get(first_src, {})
+            issues.add("SITEMAP", "NOT_IN_SITEMAP", "INFO",
+                       f"Internal 200 HTML page linked from {int(reuse or 0) + 1} relationship(s) but not in the sitemap",
+                       first_src, "ANCHOR", url, url, "", "", 200, None, url, 0, "")
+            if info:
+                _sm(info["sitemap"])["issues"] += 1
+
+    # ---------------------------------------------------------------- 16 sitemap audit (+ sitemap issues)
+    now_iso = _utc()
+    lm: Dict[str, Dict[str, int]] = {}
+    for page_norm, sm_url, lastmod in conn.execute(
+            "SELECT normalized_url, sitemap_url, lastmod FROM on_page_sitemap_entries WHERE job_id = ?", J):
+        st = lastmod_state(lastmod or "", now_iso)
+        c = lm.setdefault(sm_url or "", {"MISSING": 0, "INVALID": 0, "FUTURE": 0, "": 0})
+        c[st] += 1
+        if st in ("INVALID", "FUTURE"):
+            issues.add("SITEMAP", f"SITEMAP_LASTMOD_{st}", "LOW", f"<lastmod>{str(lastmod)[:40]}</lastmod>",
+                       sm_url, "SITEMAP", page_norm, page_norm, "", "", None, None, "", None, "")
+    sources = [dict(zip([d[0] for d in cur.description], row)) for cur in
+               [conn.execute("""SELECT sitemap_url, parent_sitemap_url, depth, kind, status, http_status, classification,
+                                       urls_listed, duplicates, rejected, size_bytes, selected, error_message
+                                  FROM on_page_sitemap_sources WHERE job_id = ? ORDER BY depth, sitemap_url""", J)]
+               for row in cur.fetchall()]
+    known = {s_["sitemap_url"] for s_ in sources}
+    for key in sorted(k for k in sm_agg if k not in known):     # URL-list audits: group by the input name
+        sources.append({"sitemap_url": key, "parent_sitemap_url": "", "depth": 0, "kind": "URL_LIST" if key else "",
+                        "status": "", "http_status": None, "classification": "", "urls_listed": sm_agg[key]["pages_audited"],
+                        "duplicates": 0, "rejected": 0, "size_bytes": 0, "selected": 1, "error_message": ""})
+    sm_header = ["sitemap_url", "parent_sitemap_url", "depth", "kind", "fetch_status", "http_status", "classification",
+                 "urls_listed", "duplicates", "rejected", "size_bytes", "selected", "pages_audited", "pages_2xx",
+                 "pages_redirected", "pages_4xx_5xx", "pages_failed_or_blocked", "pages_pending", "noindex_pages",
+                 "non_canonical_pages", "lastmod_missing", "lastmod_invalid", "lastmod_future", "issues", "health",
+                 "error_message"]
+    sm_rows = []
+    for s_ in sources:
+        url = s_["sitemap_url"]
+        a = sm_agg.get(url) or _sm(url)
+        c = lm.get(url, {"MISSING": 0, "INVALID": 0, "FUTURE": 0})
+        failed = s_["status"] == "FAILED"
+        sm_issues = []
+        if failed:
+            sm_issues.append(("SITEMAP_FETCH_FAILED", "HIGH", f"{s_['classification']}: {str(s_['error_message'])[:150]}"))
+        if int(s_["urls_listed"] or 0) > 50000 or int(s_["size_bytes"] or 0) > 50 * 1024 * 1024:
+            sm_issues.append(("SITEMAP_TOO_LARGE", "HIGH", f"{s_['urls_listed']} URLs, {s_['size_bytes']} bytes"))
+        if int(s_["duplicates"] or 0):
+            sm_issues.append(("SITEMAP_DUPLICATE_URLS", "LOW", f"{s_['duplicates']} duplicate URL entr(y/ies)"))
+        if c["MISSING"]:
+            sm_issues.append(("SITEMAP_LASTMOD_MISSING", "INFO", f"{c['MISSING']} URL(s) without <lastmod>"))
+        for t, sev, detail in sm_issues:
+            issues.add("SITEMAP", t, sev, detail, url, "SITEMAP", url, url, "", "", s_["http_status"], None, "", None, "")
+        n_issues = a["issues"] + len(sm_issues) + c["INVALID"] + c["FUTURE"]
+        problems = (a["pages_4xx_5xx"] + a["pages_failed_or_blocked"] + a["pages_redirected"] + a["noindex_pages"]
+                    + a["non_canonical_pages"] + c["INVALID"] + c["FUTURE"] + len(sm_issues))
+        health = "FAILED" if failed else ("ISSUES" if problems else "OK")
+        sm_rows.append([url, s_["parent_sitemap_url"], s_["depth"], s_["kind"], s_["status"], s_["http_status"],
+                        s_["classification"], s_["urls_listed"], s_["duplicates"], s_["rejected"], s_["size_bytes"],
+                        s_["selected"], a["pages_audited"], a["pages_2xx"], a["pages_redirected"], a["pages_4xx_5xx"],
+                        a["pages_failed_or_blocked"], a["pages_pending"], a["noindex_pages"], a["non_canonical_pages"],
+                        c["MISSING"], c["INVALID"], c["FUTURE"], n_issues, health, s_["error_message"]])
+    with open(out("16_sitemap_audit.csv"), "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(sm_header)
+        w.writerows([[_safe(v) for v in row] for row in sm_rows])
+    files["16_sitemap_audit.csv"] = len(sm_rows)
+    sm_pages_total = sum(r_[12] for r_ in sm_rows)
+
     issues.close()
     files["12_issues.csv"] = issues.n
     n_types, summary_total, page_total = issues.write_summaries(out("13_issue_summary.csv"), out("14_page_issue_summary.csv"))
@@ -357,6 +580,10 @@ def build_on_page_csv_package(
     job_cols = [d[0] for d in conn.execute("SELECT * FROM on_page_audit_jobs LIMIT 0").description]
     job_row = dict(zip(job_cols, job)) if job else {}
     integrity = conn.execute("PRAGMA integrity_check" if full_integrity_check else "PRAGMA quick_check").fetchone()[0]
+    seo_db = q1("SELECT COUNT(*) FROM on_page_seo_pages WHERE job_id = ?")
+    seo_expected = q1("""SELECT COUNT(*) FROM on_page_source_pages WHERE job_id = ? AND crawl_state = 'COMPLETED'
+                          AND http_status BETWEEN 200 AND 299 AND COALESCE(html_bytes, 0) > 0
+                          AND (COALESCE(content_type, '') = '' OR LOWER(content_type) LIKE '%html%')""") if seo_db else 0
 
     terminal_src = ("COMPLETED", "FAILED", "BLOCKED", "TIMED_OUT", "EXPLICITLY_EXCLUDED")
     checks: List[Tuple[str, Any, Any]] = [
@@ -387,6 +614,9 @@ def build_on_page_csv_package(
         ("issue_rows_eq_page_issue_summary_total", issues.n, page_total),
         ("broken_link_issues_eq_broken_url_csv_rows", files["07_broken_urls.csv"], issues.broken_link_rows),
         ("broken_image_issues_eq_broken_image_csv_rows", files["09_broken_images.csv"], issues.broken_image_rows),
+        ("seo_csv_rows_eq_db_seo_pages", seo_db, files["15_seo_page_audit.csv"]),
+        ("every_parsed_2xx_html_page_has_seo_row", seo_expected, seo_db),
+        ("sitemap_csv_pages_eq_source_pages", src_total, sm_pages_total),
         ("database_integrity", "ok", integrity),
     ]
     recon_rows = [(name, exp, act, "PASS" if exp == act else "FAIL") for name, exp, act in checks]
@@ -423,6 +653,7 @@ def build_on_page_csv_package(
         ("issues_total", issues.n), ("issues_high", issues.by_sev["HIGH"]), ("issues_medium", issues.by_sev["MEDIUM"]),
         ("issues_low", issues.by_sev["LOW"]), ("issues_info", issues.by_sev["INFO"]),
         ("issue_types_found", n_types), ("source_pages_with_issues", len(issues.by_page)),
+        ("seo_pages_analyzed", seo_db), ("sitemaps_reported", files["16_sitemap_audit.csv"]),
         ("crawl_duration_seconds", dur),
         ("source_pages_per_second", perf.get("source_pages_per_sec")),
         ("url_validation_rps", perf.get("url_validations_per_sec", perf.get("dest_validations_per_sec"))),

@@ -62,7 +62,28 @@ def parse_args(argv=None):
     p.add_argument("--max-source-bytes", type=int, default=5 * 1024 * 1024)
     p.add_argument("--stop-file", default="", help="graceful stop when this file appears (cross-platform)")
     p.add_argument("--result-json", default="", help="write the run result (status, metrics, package) here")
+    p.add_argument("--sitemap-meta", default="",
+                   help="JSON from sitemap_config (page -> sitemap/lastmod, sitemap tree) for the sitemap + SEO reports")
+    p.add_argument("--no-seo", action="store_true", help="skip SEO / technical-SEO page facts")
     return p.parse_args(argv)
+
+
+def store_sitemap_meta(conn, job_id: str, meta: dict):
+    """Idempotent (safe on resume): page -> sitemap/lastmod and the sitemap tree with fetch/hygiene stats."""
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO on_page_sitemap_entries (job_id, normalized_url, sitemap_url, lastmod, changefreq, priority) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(job_id, URLNormalizer.normalize(e["u"]), e.get("sm") or "", str(e.get("lastmod") or "")[:60],
+              str(e.get("changefreq") or "")[:20], e.get("priority")) for e in meta.get("entries", [])])
+        conn.executemany(
+            "INSERT OR IGNORE INTO on_page_sitemap_sources (job_id, sitemap_url, parent_sitemap_url, depth, kind, status, "
+            "http_status, classification, urls_listed, duplicates, rejected, size_bytes, selected, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(job_id, s["sitemap_url"], s.get("parent_sitemap_url") or "", int(s.get("depth") or 0), s.get("kind") or "",
+              s.get("status") or "", s.get("http_status"), s.get("classification") or "", int(s.get("urls_listed") or 0),
+              int(s.get("duplicates") or 0), int(s.get("rejected") or 0), int(s.get("size_bytes") or 0),
+              int(s.get("selected", 1)), str(s.get("error_message") or "")[:300]) for s in meta.get("sources", [])])
 
 
 def run(a) -> dict:
@@ -78,8 +99,18 @@ def run(a) -> dict:
 
     with open(a.urls, encoding="utf-8") as f:
         urls = [u.strip() for u in f if u.strip()]
-    entries = [{"original_url": u, "normalized_url": URLNormalizer.normalize(u), "source_sitemap": os.path.basename(a.urls),
-                "source_sitemap_number": 1} for u in urls]
+    sm_meta = None
+    if a.sitemap_meta:
+        with open(a.sitemap_meta, encoding="utf-8") as f:
+            sm_meta = json.load(f)
+    sm_of = {URLNormalizer.normalize(e["u"]): e for e in (sm_meta or {}).get("entries", [])}
+    sm_num = {s["sitemap_url"]: i for i, s in enumerate((sm_meta or {}).get("sources", []), 1)}
+    entries = []
+    for u in urls:
+        n = URLNormalizer.normalize(u)
+        sm = (sm_of.get(n) or {}).get("sm") or os.path.basename(a.urls)
+        entries.append({"original_url": u, "normalized_url": n, "source_sitemap": sm,
+                        "source_sitemap_number": sm_num.get(sm, 1)})
 
     budgets = {}
     for spec in a.host_budget:
@@ -99,7 +130,7 @@ def run(a) -> dict:
         probe_url=a.probe_url or None, akamai_cooldown_sec=a.akamai_cooldown_sec,
         read_timeout=a.read_timeout, max_retries=a.max_retries, progress_json_path=a.progress_json or None,
         host_budgets=budgets, host_budget_cooldown_sec=a.host_budget_cooldown_sec,
-        max_source_bytes=a.max_source_bytes,
+        max_source_bytes=a.max_source_bytes, audit_seo=not a.no_seo,
     )
     proc = psutil.Process()
     peak = {"rss": 0.0, "cpu": []}
@@ -133,6 +164,8 @@ def run(a) -> dict:
 
     try:
         eng.initialize_inventory(entries)
+        if sm_meta:
+            store_sitemap_meta(eng.conn, a.job_id, sm_meta)
         stats = asyncio.run(_run_with_stop_watch())
     finally:
         eng.close()
