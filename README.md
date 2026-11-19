@@ -23,9 +23,20 @@ prioritized, actionable issue report. Built for
   refresh, viewport, `lang`, JSON-LD validity, Open Graph, thin and duplicate content, mixed content, hreflang codes,
   self-reference, x-default and reciprocity, URL hygiene, orphan pages, internal pages missing from the sitemap, and
   sitemap lastmod/duplicate/size checks.
+- **Every URL on the page**: links, canonical/hreflang/social/JSON-LD URLs, scripts, stylesheets, icons, CSS `url()`,
+  media, embeds and forms (recorded, never requested), each typed and validated once; images also from CSS
+  backgrounds, video posters and JSON-LD.
+- **Explorers for huge audits**: URL audit, URL detail (HTTP, redirect chain, canonical, robots, metadata, headings,
+  structured data, links, images, issues with evidence, raw rows), Link audit, Image audit, Issue explorer — all
+  server-side filtered/sorted/paged, rendered in a virtualized grid (300,000 rows → < 80 DOM rows).
+- **Issues you can work**: issues persisted and deduplicated (page + rule + subject), lifecycle OPEN → IN_PROGRESS →
+  VERIFIED → RESOLVED per project (a re-audit verifies fixes and re-opens regressions), remediation plan generated
+  from them, deterministic SEO health score (35/25/20/10/10, `qcv5-health-1.0`).
+- **Job lifecycle**: pause, resume, cancel, crash recovery (INTERRUPTED → resume from checkpoint); live progress,
+  throughput and ETA come from the backend.
 - **Actionable reports**: ~100 issue types with severity and a specific recommended fix, plus per-type and per-page
-  summaries; 16 streamed CSVs in one ZIP.
-- **Trustworthy numbers**: a 31-check trust gate reconciles every CSV against the database; any mismatch fails the run.
+  summaries; 18 streamed files in one ZIP with a manifest (rows, size, SHA-256 verified against the ZIP).
+- **Trustworthy numbers**: a 35-check trust gate reconciles every CSV against the database; any mismatch fails the run.
 - **Resumable**: stop and resume any time; API restarts don't interrupt audits.
 
 ## Quick start
@@ -59,6 +70,11 @@ target's edge tolerates:
 | 8 req/s (conservative preset) | ~23 min |
 | 12 req/s ("15–20 min target" preset) | ~15 min |
 | 14 req/s (fastest stable on the simulated Akamai model) | 13.1 min measured |
+| 16 req/s, max 18 (Enterprise 150K preset, simulated edge without WAF) | **11.25 min measured end to end** (crawl 10.8 min + reports/ZIP 24 s) |
+| 16 req/s preset on the simulated Akamai model (blocks > 15 req/s) | crawl 13.0 min measured (one WAF cooldown, rate adapted down to ~13.8 req/s); its report build ran before the report-speed fix (538 s), which now takes ~24 s → ~13.5 min |
+
+300,000 pages need ~318K primary requests: **≤ 4 h requires the edge to sustain ≥ 23 req/s** (see the performance
+report for the measured 300K run).
 
 Images on a CDN with its own budget run in parallel; images under the same rate-limited domain add ~70 min per 10K
 pages. Measure the real ceiling from your network with `bench/live_edge_matrix.py` before raising rates.
@@ -68,16 +84,20 @@ pages. Measure the real ceiling from your network with `bench/live_edge_matrix.p
 | File | Contents |
 |---|---|
 | `01_summary.csv` | Totals, rates, issue counts by severity, reconciliation + integrity status |
+| `00_manifest.csv` | Every file: dataset, row count, columns, size, SHA-256, status |
+| `17_input_exceptions.csv` | Input lines that are not pages (invalid URL, exact or normalized duplicate) with the reason |
 | `12_issues.csv` | One row per problem: severity, type, page, element, URL, anchor/alt, status, detail, **recommended action** |
 | `13_issue_summary.csv` · `14_page_issue_summary.csv` | Per issue type (unique URLs, pages affected) · per page, worst first |
 | `15_seo_page_audit.csv` | One row per 2xx HTML page: indexability, robots directives, title/description/H1, headings, lang, viewport, structured data, Open Graph, word count, content hash, hreflang, mixed content, link counts |
 | `16_sitemap_audit.csv` | One row per sitemap file: fetch status, URLs, duplicates, size, and pages audited / 2xx / redirected / errors / noindex / non-canonical / lastmod problems, health |
 | `02`–`10` | Source pages, every link relationship, unique URL validations, every image placement, unique image validations, broken links, redirects, broken images, external links |
-| `11_reconciliation.csv` | The 31 trust-gate checks with expected/actual values |
+| `11_reconciliation.csv` | The 35 trust-gate checks with expected/actual values |
 
 ## Documentation
 
-- [Architecture](docs/architecture/ARCHITECTURE.md): components, pipeline, data model, API, performance model, security, operations
+- [Architecture](docs/architecture/ARCHITECTURE.md): components, pipeline, data model, API, lifecycle, issues/score, performance model, security, operations
+- [API contract (frozen v1.0)](docs/api/API_CONTRACT.md) + [OpenAPI](docs/api/openapi_onpage.json)
+- [Backend audit and gap analysis](docs/audit/BACKEND_AUDIT_AND_GAPS.md)
 - [Design system](docs/design/DESIGN_SYSTEM.md): tokens, components, motion, accessibility
 - [10K performance and accuracy report](docs/performance/ON_PAGE_10K_URL_IMAGE_AUDIT.md)
 - [User guide](USER_GUIDE.md) (classic console)
@@ -108,7 +128,11 @@ test_*.py                 test suites
 python -m pytest -q --ignore=test_container.py --ignore=test_ex.py --ignore=test_html.py --ignore=test_js.py
 ```
 
-Key suites: `test_on_page_url_image_audit.py` (extraction, dedup, issues, reports), `test_seo_sitemap_audit.py`
+Key suites: `test_platform_pipeline.py` (deterministic fixture site: every HTTP class, redirects, all URL types,
+issues DB + lifecycle, score, manifest, explorers, remediation, pause/resume/cancel, SIGKILL recovery),
+`test_security_validation.py` (SSRF, CSV injection, input validation), `test_e2e_platform_ui.py` (Playwright: sitemap
+wizard → live audit → explorers → issue lifecycle → remediation → reports, 300K-row grid),
+`test_on_page_url_image_audit.py` (extraction, dedup, issues, reports), `test_seo_sitemap_audit.py`
 (SEO rules, sitemap discovery/selection/profiles, end-to-end SEO + sitemap reports), `test_onpage_dashboard_api.py`
 (service + API end-to-end), `test_dashboard_ui.py` (real-browser UI smoke), `test_url_status_large_volume.py`
 (125K URLs). The four ignored files are scratch scripts that browse live sites. In a sandbox without internet/DNS,

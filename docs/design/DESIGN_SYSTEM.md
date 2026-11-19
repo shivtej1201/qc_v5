@@ -52,6 +52,44 @@ toggle persisted per browser).
 ![Sitemap profiles](screenshots/sitemaps-profiles.png)
 ![New audit wizard](screenshots/new-audit-wizard.png)
 
+## Motion system (GSAP 3.12.5, vendored)
+
+`frontend/dashboard/vendor/gsap.min.js` (GreenSock standard no-charge license, see `GSAP_LICENSE.txt`), loaded
+locally; no CDN. Primitives live in `js/motion.js` and are the only place GSAP is called:
+
+| Primitive | Used for |
+|---|---|
+| `PageTransition`, `CardReveal`, `StaggerReveal` | view and card entrance (once per view) |
+| `CounterAnimation` | KPI values count from the previous value |
+| `ProgressAnimation` | KPI bars, score dimension bars |
+| `StatusTransition` | glow when the lifecycle state changes (e.g. RUNNING → COMPLETED) |
+| `IssuePulse` | FAILED / INTERRUPTED lifecycle pill |
+| `ModalTransition` | wizard, issue detail |
+| `ChartReveal` | charts |
+
+Rules: every tween belongs to the current view's `gsap.context` and is reverted on navigation (no leaked timelines);
+`fromTo` with explicit end values only (a `from` tween reads computed styles, which breaks while a CSS animation runs);
+nothing animates under `prefers-reduced-motion` or during a polling refresh; table rows are never animated.
+3D stays where it carries data (the crawl core: pending / in flight / done / HIGH-issue pages, rings follow req/s).
+
+## Large-data components
+
+| Component | Behaviour |
+|---|---|
+| **Virtualized grid** (`js/grid.js`) | Only visible rows (+ overscan) are in the DOM (< 80 nodes for 300,000 rows, verified in E2E); 200-row pages fetched on demand from the API; server-side filter / sort / search; column chooser (persisted per grid); keyboard Up/Down/Enter; `role="grid"` with `aria-rowcount` / `aria-rowindex` |
+| **Audit tabs** | Overview · URLs · Links · Images · Issues · Remediation · Reports, one shared header with the lifecycle pill and Pause / Resume / Cancel |
+| **URL detail** | Overview, HTTP, redirect chain, canonical & robots, metadata, headings & content, structured data & hreflang, performance & security, links & images, issues with evidence, raw stored rows |
+| **Issue detail** (modal) | evidence, recommended fix, lifecycle status + note (OPEN / IN_PROGRESS / VERIFIED / RESOLVED / DISMISSED) |
+| **Score card** | gauge + five weighted dimensions + `formula_version` |
+| **Reports** | trust gate + manifest (rows, size, SHA-256, status per file) + downloads |
+
+Themes: dark and light (the Watermelon theme is intentionally not added).
+
+![Audit overview with health score](screenshots/audit-overview-score.png)
+![Link audit (virtualized grid)](screenshots/link-audit-grid.png)
+![Issue detail](screenshots/issue-detail.png)
+![Reports and manifest](screenshots/reports-manifest.png)
+
 ## Accessibility
 
 Keyboard reachable (rows are focusable, Enter opens), visible focus rings, `aria-label`s on charts summarizing the

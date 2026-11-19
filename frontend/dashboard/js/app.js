@@ -3,6 +3,8 @@ import { api } from "./api.js";
 import { h, mount, fmt, countUp, toast, stateClass, icon } from "./ui.js";
 import { gauge, severityDonut, barList, areaChart } from "./charts.js";
 import { createCrawlCore } from "./scene3d.js";
+import { beginView, CounterAnimation, ProgressAnimation, StatusTransition, IssuePulse, ModalTransition } from "./motion.js";
+import { urlsView, urlDetailView, linksView, imagesView, issuesView, remediationView, reportsView } from "./explorers.js";
 
 const ACTIVE = new Set(["RUNNING", "STOPPING"]);
 const CSV_FILES = ["01_summary.csv", "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv",
@@ -85,9 +87,11 @@ function kpi(label, value, sub, frac, extra = "") {
   const v = h("div", { class: "value" }, "0");
   if (lastKpi.has(label)) v.dataset.v = String(lastKpi.get(label));
   if (typeof value === "number") lastKpi.set(label, value);
-  const bar = frac === undefined ? null : h("div", { class: "bar" }, h("i", { style: { width: `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%` } }));
+  const bar = frac === undefined ? null : h("div", { class: "bar" }, h("i", { style: { width: lastKpi.has(`bar:${label}`) ? lastKpi.get(`bar:${label}`) : "0%" } }));
+  if (frac !== undefined) lastKpi.set(`bar:${label}`, `${(Math.max(0, Math.min(1, frac)) * 100).toFixed(2)}%`);
   const card = h("div", { class: `card kpi reveal ${extra}` }, h("div", { class: "label" }, label), v, h("div", { class: "sub" }, sub || ""), bar);
-  if (typeof value === "number") countUp(v, value); else v.textContent = value ?? "—";
+  if (typeof value === "number") CounterAnimation(v, value); else v.textContent = value ?? "—";
+  if (bar) ProgressAnimation(bar.firstChild, frac);
   return card;
 }
 
@@ -96,8 +100,8 @@ function heroCard(job, stats) {
   const reuse = scene && job && sceneJob === job.job_id && sceneHostEl;
   const sceneHost = reuse ? sceneHostEl : h("div", { class: "scene" });
   const running = ACTIVE.has(job?.run_state);
-  const remaining = stats ? (stats.source_pages_total || 0) - (stats.source_pages_processed || 0) : 0;
-  const pps = running ? (history.get(job.job_id)?.at(-1)?.pps || live.source_pages_per_sec || 0) : 0;
+  const prog = job?.progress || {};
+  const pps = running ? (prog.throughput_current_pps ?? 0) : 0;
   const chip = (val, label) => h("div", { class: "chip" }, h("b", {}, val), h("span", {}, label));
   const card = h("section", { class: "card hero-3d reveal", "aria-label": "Live crawl visualization" },
     sceneHost,
@@ -106,7 +110,7 @@ function heroCard(job, stats) {
         h("div", {}, h("div", { class: "title" }, job ? job.name : "No audit yet"),
           h("div", { class: "dim", style: { fontSize: "var(--fs-xs)" } }, job ? `${job.primary_domain} · ${fmt.n(job.url_count)} source pages` : "Start an audit to see the crawl core come alive")),
         h("span", { class: "spacer" }),
-        job ? h("span", { class: stateClass(job.run_state) }, job.run_state) : null),
+        job ? lifecyclePill(job) : null),
       h("div", { class: "legend", style: { marginTop: "10px" } },
         h("span", {}, h("i", { style: { background: "var(--text-3)" } }), "pending"),
         h("span", {}, h("i", { style: { background: "var(--active)" } }), "in flight"),
@@ -115,7 +119,7 @@ function heroCard(job, stats) {
       h("div", { class: "chips" },
         chip(running ? fmt.dec(pps) : "—", "pages / s"),
         chip(running ? fmt.dec(live.primary_requests_per_sec) : "—", "req / s (primary)"),
-        chip(running && pps > 0 ? fmt.dur(remaining / pps) : "—", "ETA"),
+        chip(running && prog.eta_sec ? fmt.dur(prog.eta_sec) : "—", "ETA"),
         chip(live.current_target_rps ? `${fmt.dec(live.current_target_rps)}` : "—", "throttle req/s"),
         chip(fmt.n(live.waf_events || 0), "WAF events"))));
   if (reuse) {
@@ -149,11 +153,9 @@ function durationGauge(job, stats) {
   let minutes = null, label = "projected minutes", caption = "";
   if (job && !ACTIVE.has(job.run_state) && job.crawl_seconds) {
     minutes = job.crawl_seconds / 60; label = "actual minutes";
-  } else if (job && ACTIVE.has(job.run_state) && stats?.live_metrics) {
-    const live = stats.live_metrics, arr = history.get(job.job_id) || [];
-    const pps = arr.at(-1)?.pps || live.source_pages_per_sec || 0;
-    const left = (stats.source_pages_total || 0) - (stats.source_pages_processed || 0);
-    minutes = pps > 0 ? (live.elapsed_sec + left / pps) / 60 : est?.estimated_minutes;
+  } else if (job && ACTIVE.has(job.run_state) && job.progress) {
+    const p = job.progress;     // backend elapsed + backend ETA (recent throughput)
+    minutes = p.eta_sec !== null && p.eta_sec !== undefined ? ((p.elapsed_sec || 0) + p.eta_sec) / 60 : est?.estimated_minutes;
   } else if (est) minutes = est.estimated_minutes;
   if (est) caption = est.meets_20_min_target
     ? `On target: ${est.estimated_minutes} min predicted at ${est.rps} req/s.`
@@ -164,6 +166,62 @@ function durationGauge(job, stats) {
     gauge({ value: minutes || 0, max: 40, band: [15, 20], label, display: minutes === null ? "—" : fmt.dec(minutes),
       color: minutes === null ? "var(--text-3)" : ok ? "var(--ok)" : "var(--sev-medium)" }),
     h("p", { class: "muted", style: { fontSize: "var(--fs-sm)", textAlign: "center", margin: "6px 0 0" } }, caption));
+}
+
+function lifecyclePill(job) {
+  const st = job.lifecycle || job.run_state;
+  const pill = h("span", { class: `pill st-${st}${["RUNNING", "RESUMED", "PAUSING", "CANCELLING"].includes(st) ? " live" : ""}`, role: "status" }, st);
+  StatusTransition(pill, `${job.job_id}:${st}`);
+  if (["FAILED", "INTERRUPTED"].includes(st)) IssuePulse(pill);
+  return pill;
+}
+
+function scoreCard(score) {
+  if (!score) return h("section", { class: "card reveal" }, h("h2", {}, "SEO health score"),
+    h("p", { class: "muted" }, "Calculated when the report package is built."));
+  const dims = [["technical", "Technical", 35], ["links", "Links", 25], ["content", "Content", 20], ["performance", "Performance", 10], ["security", "Security", 10]];
+  const color = (v) => v >= 80 ? "var(--ok)" : v >= 60 ? "var(--sev-medium)" : "var(--sev-high)";
+  const bars = dims.map(([k, label, w]) => {
+    const fill = h("i", { style: { width: "0%", background: color(score[k]) } });
+    const row = h("div", { class: "bar-row", title: `${label}: ${score[k]} (weight ${w}%)` },
+      h("span", {}, `${label} ${w}%`), h("div", { class: "track" }, fill), h("span", { class: "num" }, fmt.dec(score[k], 1)));
+    requestAnimationFrame(() => ProgressAnimation(fill, (score[k] || 0) / 100));
+    return row;
+  });
+  const g = gauge({ value: score.score, max: 100, band: [80, 100], label: "health score", display: fmt.dec(score.score, 1),
+    color: color(score.score), size: 190 });
+  const c = h("section", { class: "card reveal", "aria-label": "SEO health score" },
+    h("div", { class: "card-head" }, h("h2", {}, "SEO health score"),
+      h("span", { class: "dim mono", style: { fontSize: "var(--fs-xs)" } }, `${score.formula_version} · ${fmt.n(score.pages_scored)} pages`)),
+    h("div", { class: "score-grid" }, g, h("div", { class: "bars" }, bars)),
+    h("p", { class: "dim", style: { fontSize: "var(--fs-xs)", marginTop: "var(--s-2)" } },
+      "Deterministic: per page penalty = min(1, Σ severity weights) per dimension; score = 100 × (1 − mean penalty), weighted 35/25/20/10/10."));
+  return c;
+}
+
+function lifecycleActions(d, id) {
+  const st = d.lifecycle || d.run_state;
+  const running = ["RUNNING", "RESUMED"].includes(st);
+  const out = [];
+  if (running) {
+    out.push(h("button", { class: "btn", onclick: () => act(() => api.pause(id), "Pausing — in-flight work is saved.") }, icon("stop"), "Pause"));
+    out.push(h("button", { class: "btn btn-danger", onclick: () => {
+      if (confirm("Cancel this audit for good? Completed work stays available, but it cannot be resumed.")) act(() => api.cancel(id), "Cancelling…");
+    } }, "Cancel"));
+  } else if (["PAUSED", "INTERRUPTED", "PARTIAL", "FAILED", "STOPPED"].includes(st)) {
+    out.push(h("button", { class: "btn", onclick: () => act(() => api.resume(id), "Resumed from checkpoint.") }, icon("play"), "Resume"));
+    if (st !== "FAILED") out.push(h("button", { class: "btn btn-ghost", onclick: () => {
+      if (confirm("Cancel this audit for good?")) act(() => api.cancel(id), "Audit cancelled.");
+    } }, "Cancel"));
+  }
+  return out;
+}
+
+const AUDIT_TABS = [["", "Overview"], ["urls", "URLs"], ["links", "Links"], ["images", "Images"], ["issues", "Issues"],
+  ["remediation", "Remediation"], ["reports", "Reports"]];
+function auditTabs(id, active) {
+  return h("nav", { class: "tabs", "aria-label": "Audit sections" }, AUDIT_TABS.map(([k, label]) =>
+    h("a", { href: `#/audit/${id}${k ? "/" + k : ""}`, "aria-current": active === k ? "page" : null }, label)));
 }
 
 function insightsCard(list) {
@@ -275,9 +333,7 @@ async function viewAudit(token, id) {
   const running = ACTIVE.has(d.run_state);
   const actions = [
     h("a", { class: "btn btn-ghost", href: "#/audits" }, icon("back"), "Audits"),
-    running ? h("button", { class: "btn btn-danger", onclick: async () => { await act(() => api.stop(id), "Stopping gracefully — in-flight work is saved."); } }, icon("stop"), "Stop")
-      : ["STOPPED", "INTERRUPTED", "PARTIAL", "FAILED"].includes(d.run_state)
-        ? h("button", { class: "btn", onclick: async () => { await act(() => api.resume(id), "Resumed from checkpoint."); } }, icon("play"), "Resume") : null,
+    ...lifecycleActions(d, id),
     d.package_available ? h("a", { class: "btn btn-primary", href: api.packageUrl(id) }, icon("download"), "Download ZIP") : null,
   ];
   // Each stage is progress against ITS OWN population (one shared scale would make 100% of
@@ -327,17 +383,22 @@ async function viewAudit(token, id) {
       h("p", { class: "muted" }, running ? "The issue report (16 CSVs + ZIP, including the SEO and sitemap audits) is built automatically when the crawl finishes."
         : "No report: the audit has not finished. Resume it to complete the crawl and build the report."))];
   }
+  const p = d.progress || {};
+  const highKpi = kpi("Issues", p.issues ?? "—", p.issues === null || p.issues === undefined ? "after the report is built" : "persisted, deduplicated");
   const content = h("div", { class: "stack" },
+    auditTabs(id, ""),
     h("div", { class: "grid g-hero" }, heroCard(d, stats), durationGauge(d, stats)),
     h("div", { class: "grid g-kpi" },
-      kpi("Source pages", stats.source_pages_processed || 0, `of ${fmt.n(stats.source_pages_total || d.url_count)}`,
-        stats.source_pages_total ? stats.source_pages_processed / stats.source_pages_total : 0),
-      kpi("Failed / timed out", (stats.source_pages_failed || 0) + (stats.source_pages_timed_out || 0), "source pages"),
-      kpi("Blocked", stats.source_pages_blocked || 0, "robots / WAF / SSRF"),
-      kpi("Unique URLs", stats.unique_http_destinations || 0, `${fmt.n(stats.url_validations_pending || 0)} pending`),
-      kpi("Unique images", stats.unique_image_urls || 0, `${fmt.n(stats.unique_images_pending || 0)} pending`),
-      kpi("Health score", d.health?.score !== undefined && d.health?.score !== null ? `${fmt.dec(d.health.score)}%` : "—", "pages without HIGH issues")),
-    h("div", { class: "grid g-2" }, funnel, insightsCard(insights)),
+      kpi("Processed", p.processed || 0, `of ${fmt.n(p.total || d.url_count)} · ${fmt.n(p.remaining || 0)} remaining`, p.total ? p.processed / p.total : 0),
+      kpi("Success", p.success || 0, `${fmt.n(p.failed || 0)} failed · ${fmt.n(p.blocked || 0)} blocked`),
+      kpi("Links", p.links || 0, `${fmt.n(p.unique_urls || 0)} unique URLs validated once`),
+      kpi("Images", p.images || 0, `${fmt.n(p.unique_images || 0)} unique images`),
+      kpi("Throughput", running ? `${fmt.dec(p.throughput_current_pps)} /s` : `${fmt.dec(p.throughput_average_pps)} /s`,
+        running ? `avg ${fmt.dec(p.throughput_average_pps)} pages/s · ${fmt.dec(p.requests_per_sec_primary)} req/s` : "average pages/s",
+        undefined),
+      highKpi),
+    h("div", { class: "grid g-2" }, scoreCard(d.score), funnel),
+    insightsCard(insights),
     reportSection,
     h("details", { class: "card" }, h("summary", {}, "Worker log (last lines)"),
       h("pre", { class: "mono dim", style: { whiteSpace: "pre-wrap", fontSize: "var(--fs-xs)" } }, (d.log_tail || []).join("\n"))));
@@ -474,6 +535,7 @@ async function openWizard(opts = {}) {
   const modal = h("div", { class: "modal modal-wide" });
   back.append(modal);
   document.body.append(back);
+  ModalTransition(modal, back);
 
   const lines = (v) => String(v || "").split(/\n+/).map((x) => x.trim()).filter(Boolean);
   const count = () => (st.mode === "paste" ? st.urls.length : st.mode === "sitemap" ? st.sm.preview?.selected_count || 0 : st.fileCount || 0);
@@ -686,9 +748,10 @@ async function viewSitemaps(token) {
     h("td", { class: "nowrap" }, p.last_run ? h("a", { href: `#/audit/${p.last_run.job_id}` }, fmt.ago(p.last_run.at), h("div", { class: "dim" }, `${fmt.n(p.last_run.pages)} pages`)) : h("span", { class: "dim" }, "never")),
     h("td", { class: "nowrap" },
       h("button", { class: "btn btn-primary", title: "Re-discover sitemaps and launch with this configuration", onclick: async (e) => {
-        e.currentTarget.disabled = true;
+        const btn = e.currentTarget;
+        btn.disabled = true;
         try { const r = await api.runProfile(p.id); toast(`Audit started: ${fmt.n(r.audit.url_count)} pages`); go(`#/audit/${r.audit.job_id}`); }
-        catch (err) { toast(err.message, "err"); e.currentTarget.disabled = false; } } }, icon("play"), "Run now"),
+        catch (err) { toast(err.message, "err"); btn.disabled = false; } } }, icon("play"), "Run now"),
       " ",
       h("button", { class: "btn", onclick: () => openWizard({ profile: p }) }, "Review & run"),
       " ",
@@ -713,6 +776,28 @@ async function viewSitemaps(token) {
   mount(app, shell("sitemaps", "Sitemaps", `${profiles.length} saved profile(s)`, actions, content));
 }
 
+// ------------------------------------------------------------------ audit explorer tabs (no polling: interactive)
+async function viewAuditTab(token, id, tab, query) {
+  const d = await api.audit(id);
+  if (token !== viewToken) return;
+  disposeScene();
+  let body;
+  if (tab === "urls") body = urlsView(id);
+  else if (tab === "url") body = await urlDetailView(id, query.get("u") || "");
+  else if (tab === "links") body = linksView(id, query);
+  else if (tab === "images") body = imagesView(id, query);
+  else if (tab === "issues") body = issuesView(id, query);
+  else if (tab === "remediation") body = remediationView(id);
+  else if (tab === "reports") body = reportsView(id, d);
+  else body = h("section", { class: "card" }, h("p", {}, "Unknown section."));
+  if (token !== viewToken) return;
+  const actions = [h("a", { class: "btn btn-ghost", href: `#/audit/${id}` }, icon("back"), "Overview"), lifecyclePill(d),
+    ...lifecycleActions(d, id),
+    d.package_available ? h("a", { class: "btn btn-primary", href: api.packageUrl(id) }, icon("download"), "ZIP") : null];
+  mount(app, shell("audits", d.name, `${d.job_id} · ${d.primary_domain} · ${fmt.n(d.progress?.total || d.url_count)} pages`, actions,
+    h("div", { class: "stack" }, auditTabs(id, tab === "url" ? "urls" : tab), body)));
+}
+
 // ------------------------------------------------------------------ router
 function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 
@@ -722,11 +807,12 @@ async function render() {
   const hash = location.hash || "#/";
   // same view re-rendered by polling -> quiet refresh (no entrance/chart animation replays)
   document.documentElement.classList.toggle("refreshing", hash === lastHash);
-  if (hash !== lastHash) lastKpi.clear();
+  if (hash !== lastHash) { lastKpi.clear(); beginView(app); }
   lastHash = hash;
   try {
-    const m = hash.match(/^#\/audit\/(onpage_[a-f0-9]{12})$/);
-    if (m) await viewAudit(token, m[1]);
+    const m = hash.match(/^#\/audit\/(onpage_[a-f0-9]{12})(?:\/([a-z]+))?(?:\?(.*))?$/);
+    if (m && m[2]) await viewAuditTab(token, m[1], m[2], new URLSearchParams(m[3] || ""));
+    else if (m) await viewAudit(token, m[1]);
     else if (hash.startsWith("#/audits")) await viewAudits(token);
     else if (hash.startsWith("#/sitemaps")) await viewSitemaps(token);
     else await viewOverview(token);
