@@ -464,3 +464,83 @@ def test_125k_urls_end_to_end(workdir):
         asyncio.run(go())
     finally:
         target.stop()
+
+
+def test_csv_chunk_with_leading_non_urls_loses_no_rows(workdir):
+    """Regression: URL column must be detected once; a chunk that starts with non-URL cells used to
+    end the whole file silently."""
+    settings.BATCH_SIZE = 100
+    rows = [f"https://a.example/{i}" for i in range(100)] + ["N/A"] * 6 + [f"https://a.example/x{i}" for i in range(250)]
+
+    async def go():
+        db, jm = await open_env()
+        try:
+            job_id, sheets = await submit(jm, rows, header=None)
+            assert sheets == [{"name": "CSV Data", "count": len(rows)}]
+            c = await db.get_url_status_counts(job_id)
+            assert c["total_urls"] == len(rows) and c["invalid_urls"] == 6
+        finally:
+            await db.close()
+
+    asyncio.run(go())
+
+
+def test_stranded_duplicates_are_healed(workdir):
+    """Regression: a crash between the canonical write and the duplicate copy (separate statements on
+    a shared connection) must not leave duplicates PENDING forever."""
+    async def go():
+        db, jm = await open_env()
+        try:
+            job_id, _ = await submit(jm, ["https://a.example/1", "https://a.example/1", "https://a.example/1#x"])
+            # simulate the crash window: canonical written, duplicates not
+            await db.conn.execute(
+                "UPDATE job_url_items SET item_state='DONE', outcome='OK', validated=1, final_status_code=200, "
+                "status='Working', validation_source='NEW_CHECK' WHERE job_id=? AND row_no=1", (job_id,))
+            await db.conn.commit()
+            assert await db.heal_pending_duplicates(job_id) == 2
+            got = await items(db, job_id)
+            assert [(r["item_state"], r["outcome"], r["final_status_code"], r["validation_source"]) for r in got] == [
+                ("DONE", "OK", 200, "NEW_CHECK"), ("DONE", "OK", 200, "DUPLICATE"), ("DONE", "OK", 200, "DUPLICATE")]
+            assert await db.heal_pending_duplicates(job_id) == 0
+        finally:
+            await db.close()
+
+    asyncio.run(go())
+
+
+def test_spaces_in_url_path_are_validated_not_invalid(target, workdir):
+    """Regression: spaces in the path/query are percent-encoded and validated; only a malformed host is INVALID."""
+    b = target.base
+
+    async def go():
+        db, jm = await open_env()
+        try:
+            job_id, _ = await submit(jm, [f"{b}/ok/space test", "https://bad host.example/x"])
+            assert await run_daemon(db, new_daemon(db, jm), job_id, timeout=60) == "COMPLETED"
+            got = await items(db, job_id)
+            assert (got[0]["outcome"], got[0]["final_status_code"]) == ("OK", 200)
+            assert got[1]["outcome"] == "INVALID_URL"
+        finally:
+            await db.close()
+
+    asyncio.run(go())
+
+
+def test_database_connect_does_not_need_crawler_dependencies(workdir):
+    """Regression: the API server's Database.connect() must not import psutil/httpx crawler modules."""
+    import subprocess
+    code = (
+        "import builtins,asyncio,sys\n"
+        "real=builtins.__import__\n"
+        "def imp(n,*a,**k):\n"
+        "    if n=='psutil': raise ModuleNotFoundError('psutil blocked')\n"
+        "    return real(n,*a,**k)\n"
+        "builtins.__import__=imp\n"
+        "import db\n"
+        "async def go():\n"
+        "    d=db.Database('x.db'); await d.connect(); await d.close()\n"
+        "asyncio.run(go()); print('OK')\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], cwd=workdir, capture_output=True, text=True,
+                       env={**os.environ, "PYTHONPATH": HERE})
+    assert r.stdout.strip().endswith("OK"), r.stderr[-800:]

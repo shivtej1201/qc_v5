@@ -15,6 +15,7 @@ class _DNSResolutionError(Exception):
 # Short negative cache for DNS failures: avoids hammering the resolver for every URL of a dead
 # host in a 125K-URL job, while still re-trying the host after the TTL.
 _DNS_FAIL_TTL_SEC = 60.0
+_DNS_FAIL_MAX_ENTRIES = 10000
 _dns_fail_until = {}
 _dns_fail_lock = threading.Lock()
 
@@ -104,7 +105,13 @@ def _resolve_and_check_hostname(hostname: str, allow_local: bool = False) -> boo
         addr_info = socket.getaddrinfo(h_clean, None)
     except Exception:
         with _dns_fail_lock:
-            _dns_fail_until[h_lower] = time.monotonic() + _DNS_FAIL_TTL_SEC
+            now2 = time.monotonic()
+            if len(_dns_fail_until) >= _DNS_FAIL_MAX_ENTRIES:
+                for k in [k for k, v in _dns_fail_until.items() if v <= now2]:
+                    del _dns_fail_until[k]
+                if len(_dns_fail_until) >= _DNS_FAIL_MAX_ENTRIES:
+                    _dns_fail_until.clear()   # still full of live entries: forget them (costs only re-lookups)
+            _dns_fail_until[h_lower] = now2 + _DNS_FAIL_TTL_SEC
         raise _DNSResolutionError(h_clean)
     if not addr_info:
         raise _DNSResolutionError(h_clean)
@@ -138,14 +145,17 @@ class URLNormalizer:
 
     @staticmethod
     def is_valid_http_url(url: str) -> bool:
-        """Pure syntax check (no network): absolute http(s) URL with a host and no embedded whitespace."""
+        """Pure syntax check (no network): absolute http(s) URL with a valid host[:port].
+        Whitespace is only invalid in the scheme/authority. Spaces in the path or query are common on
+        real sites (e.g. AEM '/content/dam/My Image.png'); browsers and httpx percent-encode them, so
+        such URLs are validated like any other instead of being skipped as invalid."""
         try:
             if not url or not isinstance(url, str):
                 return False
             u = url.strip()
-            if any(ch.isspace() for ch in u):
-                return False
             parsed = urllib.parse.urlsplit(u)
+            if any(ch.isspace() for ch in parsed.scheme + parsed.netloc):
+                return False
             if parsed.scheme.lower() not in ("http", "https"):
                 return False
             if not parsed.hostname:

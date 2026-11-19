@@ -114,7 +114,7 @@ def site_handler(path):
         body = f"""<html><head><link rel="canonical" href="/p/{i}"><meta property="og:image" content="/img/og.jpg"></head><body>
           <img src="/img/logo.webp" alt="Logo {i % 2}"><img src="/img/logo.webp" alt="Logo {i % 2}">
           <img srcset="/img/hero-{i}.webp 400w, /img/hero-{i}-2x.webp 800w" alt="">
-          <img data-src="/img/broken.png" alt="broken"><img src="/img/fake.png">
+          <img data-src="/img/broken.png" alt="broken"><img src="/img/fake.png"><img src="/img/My Photo.webp" alt="space">
           <a href="/product/123">p</a><a href="/product/123">p again</a><a href="/p/{nxt}">next</a><a href="/p/{prv}">prev</a>
           <a href="/r301">a</a><a href="/r302">b</a><a href="/nf">c</a><a href="/gone">d</a><a href="/err">e</a>
           <a href="/slow">f</a><a href="/private/x">g</a><a href="/waf">h</a><a href="https://bad host.example/x">bad</a>
@@ -125,7 +125,7 @@ def site_handler(path):
         return html_resp("<html>ok</html>", delay=0.6)                 # slow -> concurrent discoveries overlap
     if path == "/img/logo.webp":
         return 200, {"Content-Type": "image/webp"}, b"RIFF....WEBP", 0.6
-    if path.startswith("/img/hero") or path == "/img/og.jpg":
+    if path.startswith("/img/hero") or path in ("/img/og.jpg", "/img/My%20Photo.webp"):
         return 200, {"Content-Type": "image/webp"}, b"x" * 100, 0.0
     if path == "/img/broken.png":
         return html_resp("missing", 404)
@@ -204,6 +204,9 @@ def test_end_to_end_url_image_dedup_validation_and_csv_zip():
         assert uu[f"{b}/p/0"]["validation_source"] == "SOURCE_PAGE_REUSED"
         assert uu[f"{b}/product/123"]["validation_source"] == "NEW_CHECK"
         assert ui[f"{b}/img/fake.png"]["image_issue"].startswith("CONTENT_TYPE_MISMATCH")
+        sp = ui[f"{b}/img/My Photo.webp"]                        # space in path: validated, not INVALID
+        assert (sp["http_status"], sp["validation_state"], sp["image_type"]) == ("200", "VALIDATED", "HTTP_IMAGE")
+        assert h["/img/My%20Photo.webp"] == 1
         assert ui[f"{b}/img/broken.png"]["http_status"] == "404"
         assert ui[f"{b}/img/logo.webp"]["reuse_count"] == str(N_SRC - 1)
         broken_img = {r["normalized_image_url"] for r in read_csv(os.path.join(w, "09_broken_images.csv"))}
@@ -328,5 +331,55 @@ def test_trust_gate_fails_on_discrepancy():
         failed = {r["check"] for r in pkg["reconciliation"] if r["status"] == "FAIL"}
         assert pkg["final_qc_status"] == "FAILED"
         assert "every_reused_image_result_points_to_real_validation" in failed
+    finally:
+        ctx.close()
+
+
+def test_host_budget_rate_limits_cdn_and_isolates_its_waf():
+    """Images on a separate host (localhost) get their OWN budget: requests never exceed its rate,
+    a WAF burst there steps down/pauses only that budget (primary untouched), and requeued images
+    still end VALIDATED."""
+    import threading
+    state = {"waf_left": 3, "lock": threading.Lock()}
+    port_box = {}
+
+    def handler(path):
+        if path == "/robots.txt":
+            return 200, {"Content-Type": "text/plain"}, b"", 0.0
+        if path.startswith("/p/"):
+            i = int(path.split("/")[-1])
+            imgs = "".join(f'<img src="http://localhost:{port_box["p"]}/bimg/{i}-{k}.png" alt="x">' for k in range(5))
+            return html_resp(f"<html><body>{imgs}</body></html>")
+        if path.startswith("/bimg/"):
+            with state["lock"]:
+                if state["waf_left"] > 0:
+                    state["waf_left"] -= 1
+                    return 403, {"Content-Type": "text/html", "Server": "AkamaiGHost"}, AKAMAI_403, 0.0
+            return 200, {"Content-Type": "image/png"}, b"\x89PNG", 0.0
+        return html_resp("nf", 404)
+
+    ctx = Ctx(handler)
+    port_box["p"] = ctx.srv.port
+    try:
+        eng = _engine(ctx, job="HB", source_concurrency=6, image_concurrency=10, waf_cooldown_threshold=3,
+                      target_rps=50, min_rps=40, max_rps=50,
+                      host_budgets={"localhost": {"rps": 5}}, host_budget_cooldown_sec=0.5)
+        eng.initialize_inventory(sources_for(ctx.srv.base, [f"/p/{i}" for i in range(6)]))
+        t0 = time.time()
+        st = asyncio.run(eng.run())
+        eng.close()
+        assert st["status"] == "COMPLETED" and st["counter_reconciliation"]["passed"]
+        hb = eng.host_budgets["localhost"]
+        assert hb.cooldowns >= 1 and hb.rps < 5, hb.snapshot()           # stepped down 15% on its own WAF
+        assert eng.cooldown_count == 0 and eng.target_rps == 50           # primary budget untouched
+        ts = sorted(t for p, v in ctx.srv.times.items() if p.startswith("/bimg/") for t in v)
+        assert len(ts) == 30 + 3                                          # 30 unique images + 3 WAF retries
+        worst = max(sum(1 for t in ts if s <= t < s + 1.0) for s in ts)
+        assert worst <= 6, f"{worst} requests in 1s on a 5 req/s budget"
+        assert ts[-1] - ts[0] >= (30 - 1) / 5 * 0.8                       # cannot finish faster than the budget
+        states = q(ctx.db, "SELECT validation_state, COUNT(*) FROM on_page_image_validation_cache WHERE job_id='HB' GROUP BY 1")
+        assert states == [("VALIDATED", 30)], states
+        assert st["performance"]["host_budgets"]["localhost"]["requests"] >= 33
+        assert time.time() - t0 < 60
     finally:
         ctx.close()

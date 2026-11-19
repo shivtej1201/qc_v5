@@ -178,3 +178,39 @@ final_qc_status .................... PASS
 
 **Not tested here:** the real Bajaj edge (no network access), HTTP/2 on Akamai, and frontend UI rendering of the
 new image metrics. The frontend has no on-page audit screen; the metrics are served by the existing stats API.
+
+## F. Follow-up: review fixes and per-host rate budgets
+
+### Review fixes (each pinned by a regression test)
+
+| Issue | Fix |
+|---|---|
+| API server could not start without `psutil` (db.py imported the crawler for the image DDL) | DDL moved to dependency-free `on_page_schema.py`; `psutil` added to `requirements.txt` |
+| URLs with spaces in path/query (e.g. AEM `/content/dam/My Image.png`) were marked INVALID and never checked | Only whitespace in scheme/host/port is invalid; spaces in path/query are percent-encoded and validated |
+| CSV upload could silently drop every row after a chunk whose first cells were not URLs | URL column detected once and reused for all chunks |
+| Crash between canonical and duplicate writes could strand DUPLICATE rows PENDING forever | `heal_pending_duplicates()` runs at batch start and before a job can be judged PARTIAL |
+| Lock retry called `rollback()` on the connection shared with the daemon/API, discarding their writes | No rollback; the statements are idempotent and simply re-run |
+| SSRF redirect hook did blocking DNS on the event loop | Resolution moved to a worker thread |
+| DNS failure cache unbounded | Capped at 10,000 entries with expiry pruning |
+
+### Per-host rate budgets (`--host-budget HOST=RPS[:MAX]`, engine `host_budgets=`)
+
+Non-primary hosts used to be limited by concurrency only. A host such as an image CDN can now get its own
+budget: strict spacing, its own WAF counter, 15% step-down + cooldown, and gradual increase. Its WAF never
+touches the primary budget. Measured on 1,000 pages with a CDN that has its own Akamai model (blocks above
+40 req/s):
+
+| | No CDN budget (old behavior) | `--cdn-budget 35` |
+|---|---|---|
+| Peak CDN req/s (server) | 126 | 37 |
+| CDN WAF blocks / 403s served | 4 / 5,635 | 0 / 0 |
+| Images with a real status | **411 / 6,046 (7%)** | **6,046 / 6,046** |
+| Crawl time | 79 s | 174 s |
+| Trust gate | PASS | PASS |
+
+The unbudgeted run "passes" reconciliation while 93% of image results are WAF blocks, so speed without a host
+budget is meaningless when the CDN is protected. With a budget the CDN becomes the long pole: 10K pages ≈ 60K
+images ÷ CDN RPS (≈29 min at 35 req/s). Measure the CDN's real safe rate and set it with `--host-budget`.
+
+Tests after this change: **111 passed, 17 failed** (the same 17 pre-existing environment failures), plus
+crash-recovery, realtime 8/8, SSRF, and large-upload script suites PASS.

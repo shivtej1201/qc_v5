@@ -35,6 +35,15 @@ AKAMAI_403 = (
 )
 
 
+def _max_in_window(ts, window=1.0):
+    worst, j = 0, 0
+    for i in range(len(ts)):
+        while ts[i] - ts[j] >= window:
+            j += 1
+        worst = max(worst, i - j + 1)
+    return worst
+
+
 class Edge:
     def __init__(self, a):
         self.a = a
@@ -49,6 +58,10 @@ class Edge:
         self.n_extra = max(1, int(a.sources * EXTRA_DEST_RATIO))
         self.page_cache = {}
         self.inflight = 0
+        self.cdn_times = deque()
+        self.cdn_block_until = 0.0
+        self.cdn_blocks = 0
+        self.all_cdn = []
         self.max_inflight = 0
         self.conc_blocks = 0
 
@@ -78,11 +91,14 @@ class Edge:
                 "kind": self.kind, "total": sum(self.kind.values()), "max_primary_req_in_1s": worst,
                 "waf_403_served": self.waf_served, "waf_blocks": self.blocks,
                 "max_primary_inflight": self.max_inflight, "concurrency_blocks": self.conc_blocks,
+                "cdn_waf_blocks": self.cdn_blocks, "max_cdn_req_in_1s": _max_in_window(self.all_cdn),
                 "duplicate_paths": len(dups), "duplicate_examples": list(dups.items())[:10],
                 "primary_first_ts": ts[0] if ts else 0, "primary_last_ts": ts[-1] if ts else 0,
             }).encode(), "application/json")
 
         key = ("P" if primary else ("C" if cdn else "X")) + path
+        if cdn:
+            self.all_cdn.append(now)
         self.hits[key] += 1
         if primary:
             self.all_primary.append(now)
@@ -107,6 +123,16 @@ class Edge:
             self.kind["robots"] += 1
             return await self.send(send, 200, b"User-agent: *\nDisallow: /private\n", "text/plain")
 
+        if cdn and self.a.cdn_waf_rps > 0:
+            self.cdn_times.append(now)
+            while self.cdn_times and now - self.cdn_times[0] > self.a.waf_window:
+                self.cdn_times.popleft()
+            if now >= self.cdn_block_until and len(self.cdn_times) > self.a.cdn_waf_rps * self.a.waf_window:
+                self.cdn_block_until = now + self.a.waf_block
+                self.cdn_blocks += 1
+            if now < self.cdn_block_until:
+                self.kind["cdn_waf_403"] += 1
+                return await self.send(send, 403, AKAMAI_403, headers=[("server", "AkamaiGHost")])
         if cdn:
             self.kind["cdn_image"] += 1
             await asyncio.sleep(max(0.0, self.rnd.lognormvariate(0, 0.3) * self.a.cdn_latency_ms / 1000.0))
@@ -177,4 +203,5 @@ if __name__ == "__main__":
     p.add_argument("--origin-knee", type=int, default=1000, help="primary in-flight count after which latency grows")
     p.add_argument("--images", action="store_true")
     p.add_argument("--cdn-latency-ms", type=float, default=80.0)
+    p.add_argument("--cdn-waf-rps", type=float, default=0.0)
     asyncio.run(main(p.parse_args()))

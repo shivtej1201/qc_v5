@@ -20,7 +20,7 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from on_page_audit_engine import ensure_on_page_image_schema
+from on_page_schema import ensure_on_page_image_schema
 
 BROKEN_BUCKETS = ("4xx", "5xx", "Timeout", "DNS/Network", "SSL", "Robots blocked", "WAF blocked", "Other errors")
 # Same rule as on_page_report_packager._is_broken_dest, expressed in SQL over the validation cache alias "c"

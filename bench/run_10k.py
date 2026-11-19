@@ -47,6 +47,8 @@ def main():
     p.add_argument("--origin-knee", type=int, default=24)
     p.add_argument("--waf-block", type=float, default=20.0)
     p.add_argument("--images-on-primary", action="store_true", help="charge the CDN host to the primary budget")
+    p.add_argument("--cdn-budget", default="", help="RPS[:MAX] independent budget for the CDN host (127.0.0.3)")
+    p.add_argument("--cdn-waf-rps", type=float, default=0.0, help="Akamai model on the CDN host (0=off)")
     p.add_argument("--port", type=int, default=8821)
     p.add_argument("--keep", default="", help="copy the ZIP + summary here")
     p.add_argument("--out", required=True)
@@ -58,7 +60,7 @@ def main():
                             "--port", str(a.port), "--latency-ms", str(a.latency_ms), "--images",
                             "--cdn-latency-ms", str(a.cdn_latency_ms), "--waf-rps", str(a.waf_rps),
                             "--waf-conc", str(a.waf_conc), "--origin-knee", str(a.origin_knee),
-                            "--waf-block", str(a.waf_block)])
+                            "--waf-block", str(a.waf_block), "--cdn-waf-rps", str(a.cdn_waf_rps)])
     try:
         for h in ("127.0.0.1", "127.0.0.2", "127.0.0.3"):
             wait_port(h, a.port)
@@ -76,7 +78,8 @@ def main():
             "--source-concurrency", str(a.sc), "--dest-concurrency", str(a.dc), "--image-concurrency", str(a.ic),
             "--per-host-concurrency", str(a.per_host), "--akamai-cooldown-sec", str(a.waf_block),
             "--read-timeout", "15", "--max-retries", "1",
-        ] + (["--primary-hosts", "127.0.0.3"] if a.images_on_primary else []))
+        ] + (["--primary-hosts", "127.0.0.3"] if a.images_on_primary else [])
+          + (["--host-budget", f"127.0.0.3={a.cdn_budget}", "--host-budget-cooldown-sec", str(a.waf_block)] if a.cdn_budget else []))
         t0 = time.time()
         res = cli.run(args)
         total = time.time() - t0

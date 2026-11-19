@@ -20,7 +20,10 @@ class SSRFRedirectBlocked(Exception):
 async def _ssrf_guard_request_hook(request: httpx.Request):
     # Runs for EVERY request the client sends, including each automatically followed redirect hop.
     url = str(request.url)
-    if not URLNormalizer.is_safe_url(url, allow_local=getattr(settings, "ALLOW_LOCAL_TESTING", False)):
+    # is_safe_url may resolve DNS (blocking getaddrinfo): run it off the event loop so a redirect to a
+    # slow/dead host cannot stall every other in-flight check, lease heartbeat and DB flush.
+    safe = await asyncio.to_thread(URLNormalizer.is_safe_url, url, getattr(settings, "ALLOW_LOCAL_TESTING", False))
+    if not safe:
         raise SSRFRedirectBlocked(f"Blocked (SSRF): request to prohibited destination {url}")
 
 

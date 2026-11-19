@@ -188,6 +188,9 @@ class BatchWorkerDaemon:
         job_id, batch_id = batch['job_id'], batch['id']
         force_recheck = bool(batch.get('force_recheck'))
         allow_local = getattr(settings, "ALLOW_LOCAL_TESTING", False)
+        healed = await self.db.heal_pending_duplicates(job_id)   # repair duplicates stranded by a crash
+        if healed:
+            print(f"[url_status] job {job_id}: copied results onto {healed} stranded duplicate rows")
         items = await self.db.get_pending_url_items_for_batch(job_id, batch_id)   # resume: PENDING rows only
         reusable = {} if force_recheck else await self.db.get_reusable_results_bulk(
             list({n for _, _, n in items if n}))

@@ -43,6 +43,10 @@ def parse_args(argv=None):
     p.add_argument("--image-concurrency", type=int, default=10)
     p.add_argument("--per-host-concurrency", type=int, default=6, help="non-primary hosts (CDNs, external sites)")
     p.add_argument("--max-connections", type=int, default=0, help="0 = 2x the largest worker pool")
+    p.add_argument("--host-budget", action="append", default=[], metavar="HOST=RPS[:MAX]",
+                   help="independent rate budget for a non-primary host (repeatable); a leading '.' matches "
+                        "subdomains, e.g. --host-budget cms-assets.bajajfinserv.in=10:15")
+    p.add_argument("--host-budget-cooldown-sec", type=float, default=60.0)
     p.add_argument("--no-images", action="store_true")
     p.add_argument("--http2", action="store_true")
     p.add_argument("--allow-local", action="store_true", help="testing only: allow private/loopback targets")
@@ -72,6 +76,14 @@ def run(a) -> dict:
     entries = [{"original_url": u, "normalized_url": URLNormalizer.normalize(u), "source_sitemap": os.path.basename(a.urls),
                 "source_sitemap_number": 1} for u in urls]
 
+    budgets = {}
+    for spec in a.host_budget:
+        host, _, rates = spec.partition("=")
+        lo, _, hi = rates.partition(":")
+        if not host.strip() or not lo:
+            raise SystemExit(f"--host-budget expects HOST=RPS[:MAX], got {spec!r}")
+        budgets[host.strip()] = {"rps": float(lo), "max_rps": float(hi or lo)}
+
     eng = OnPageAuditEngine(
         db_path=a.db, job_id=a.job_id, job_name=a.job_name, allow_local=a.allow_local,
         primary_domain=a.primary_domain, primary_hosts=[h for h in a.primary_hosts.split(",") if h.strip()],
@@ -81,6 +93,7 @@ def run(a) -> dict:
         max_connections=a.max_connections or None, audit_images=not a.no_images, http2=a.http2,
         probe_url=a.probe_url or None, akamai_cooldown_sec=a.akamai_cooldown_sec,
         read_timeout=a.read_timeout, max_retries=a.max_retries, progress_json_path=a.progress_json or None,
+        host_budgets=budgets, host_budget_cooldown_sec=a.host_budget_cooldown_sec,
     )
     proc = psutil.Process()
     peak = {"rss": 0.0, "cpu": []}

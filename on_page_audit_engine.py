@@ -446,95 +446,82 @@ def classify_http_outcome(
     return ("FAILED", "Other errors", cat or "Unknown", f"Unexpected HTTP Status ({final_status})", waf_status)
 
 
-ON_PAGE_IMAGE_SCHEMA_SQL = """
-    CREATE TABLE IF NOT EXISTS on_page_image_relationships (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT NOT NULL,
-        source_page_url TEXT NOT NULL,
-        source_page_status INTEGER,
-        source_page_final_url TEXT,
-        image_url TEXT NOT NULL,
-        normalized_image_url TEXT NOT NULL,
-        image_type TEXT NOT NULL,
-        internal_external TEXT DEFAULT '',
-        attribute_source TEXT DEFAULT '',
-        alt_present INTEGER DEFAULT -1,
-        alt_text TEXT DEFAULT '',
-        width TEXT DEFAULT '',
-        height TEXT DEFAULT '',
-        loading TEXT DEFAULT '',
-        occurrence_count INTEGER DEFAULT 1,
-        representative_location TEXT DEFAULT '',
-        business TEXT DEFAULT 'NEEDS_REVIEW',
-        language TEXT DEFAULT 'UNKNOWN',
-        page_type TEXT DEFAULT 'NEEDS_REVIEW',
-        validation_source TEXT NOT NULL,
-        validation_detail TEXT DEFAULT '',
-        remark TEXT DEFAULT '',
-        extracted_at TIMESTAMP,
-        UNIQUE (job_id, source_page_url, normalized_image_url, alt_present, alt_text)
-    );
-    CREATE INDEX IF NOT EXISTS idx_opir_img ON on_page_image_relationships(job_id, normalized_image_url);
-    CREATE INDEX IF NOT EXISTS idx_opir_valsrc ON on_page_image_relationships(job_id, validation_source);
-
-    CREATE TABLE IF NOT EXISTS on_page_image_validation_cache (
-        job_id TEXT NOT NULL,
-        normalized_url TEXT NOT NULL,
-        image_type TEXT DEFAULT '',
-        internal_external TEXT DEFAULT '',
-        validation_state TEXT DEFAULT 'PENDING',
-        initial_http_status INTEGER,
-        http_status INTEGER,
-        final_url TEXT,
-        redirect_count INTEGER DEFAULT 0,
-        redirect_chain TEXT DEFAULT '[]',
-        response_time_ms REAL DEFAULT 0.0,
-        content_type TEXT DEFAULT '',
-        content_length INTEGER,
-        status_bucket TEXT DEFAULT 'PENDING',
-        status_classification TEXT DEFAULT 'Pending',
-        remark TEXT DEFAULT 'Pending Validation',
-        image_issue TEXT DEFAULT '',
-        error_type TEXT DEFAULT '',
-        error_message TEXT DEFAULT '',
-        robots_status TEXT DEFAULT 'ALLOWED',
-        waf_status TEXT DEFAULT 'NONE',
-        first_seen_source_url TEXT DEFAULT '',
-        reuse_count INTEGER DEFAULT 0,
-        checked_at TIMESTAMP,
-        PRIMARY KEY (job_id, normalized_url)
-    );
-    CREATE INDEX IF NOT EXISTS idx_opivc_state ON on_page_image_validation_cache(job_id, validation_state);
-"""
-
-ON_PAGE_IMAGE_ALTERS = (
-    "ALTER TABLE on_page_link_relationships ADD COLUMN validation_detail TEXT DEFAULT ''",
-    "ALTER TABLE on_page_validation_cache ADD COLUMN seeded_by TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN raw_image_occurrences_count INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_source_pages ADD COLUMN image_relationships_count INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN image_occurrences_extracted INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN image_relationships_persisted INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_image_urls INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_validated INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_failed INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_blocked INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_timed_out INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN unique_images_pending INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN new_image_validations INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN reused_image_validations INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_audit_jobs ADD COLUMN live_metrics TEXT DEFAULT ''",
-)
+from on_page_schema import ON_PAGE_IMAGE_ALTERS, ON_PAGE_IMAGE_SCHEMA_SQL, ensure_on_page_image_schema  # noqa: E402,F401
 
 
-def ensure_on_page_image_schema(conn: sqlite3.Connection):
-    """Additive, idempotent schema for the image audit (new tables + nullable/defaulted columns)."""
-    conn.executescript(ON_PAGE_IMAGE_SCHEMA_SQL)
-    for stmt in ON_PAGE_IMAGE_ALTERS:
+class HostRateBudget:
+    """
+    Independent request budget for a non-primary host (e.g. an image CDN behind its own WAF).
+    Same semantics as the primary pacemaker: strict 1/rps spacing (no bursts), lock-free slot
+    reservation, cooldown epoch so no herd after a pause; WAF/rate-limit responses from THIS host
+    step only THIS budget down 15% and pause it; healthy responses raise it gradually to max_rps.
+    """
+
+    def __init__(self, name: str, rps: float, max_rps: Optional[float] = None, min_rps: float = 1.0,
+                 cooldown_sec: float = 60.0, waf_threshold: int = 5, step: float = 0.25, window: int = 2000):
+        self.name = name
+        self.rps = float(rps)
+        self.max_rps = float(max_rps or rps)
+        self.min_rps = min(float(min_rps), self.rps)
+        self.cooldown_sec = cooldown_sec
+        self.waf_threshold = max(1, int(waf_threshold))
+        self.step, self.window = step, max(1, int(window))
+        self._next = 0.0
+        self._epoch = 0
+        self._gate = asyncio.Event()
+        self._gate.set()
+        self._consecutive_waf = 0
+        self._ok = 0
+        self.requests = 0
+        self.waf_events = 0
+        self.cooldowns = 0
+        self._cooldown_task: Optional[asyncio.Task] = None
+
+    async def acquire(self):
+        while True:
+            await self._gate.wait()
+            epoch = self._epoch
+            now = time.monotonic()
+            interval = 1.0 / max(0.1, self.rps)
+            slot = self._next if self._next > now else now
+            self._next = slot + interval
+            if slot > now:
+                await asyncio.sleep(slot - now)
+            if self._gate.is_set() and epoch == self._epoch:
+                self.requests += 1
+                return
+
+    def note_ok(self):
+        self._consecutive_waf = 0
+        self._ok += 1
+        if self._ok >= self.window and self.rps < self.max_rps:
+            self.rps = min(self.max_rps, round(self.rps + self.step, 2))
+            self._ok = 0
+
+    def note_waf(self):
+        self.waf_events += 1
+        self._consecutive_waf += 1
+        if self._consecutive_waf >= self.waf_threshold and self._gate.is_set():
+            self._gate.clear()
+            self._epoch += 1
+            self.cooldowns += 1
+            old = self.rps
+            self.rps = max(self.min_rps, round(self.rps * 0.85, 2))
+            self._consecutive_waf = 0
+            self._ok = 0
+            print(f"[HOST COOLDOWN {self.name} #{self.cooldowns}] {old} -> {self.rps} req/s, pausing {self.cooldown_sec:.0f}s", flush=True)
+            self._cooldown_task = asyncio.get_running_loop().create_task(self._cooldown())
+
+    async def _cooldown(self):
         try:
-            conn.execute(stmt)
-        except sqlite3.OperationalError:
-            pass  # column already exists
-    conn.commit()
+            await asyncio.sleep(self.cooldown_sec)
+        finally:
+            self._next = time.monotonic()
+            self._gate.set()
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {"rps": self.rps, "max_rps": self.max_rps, "requests": self.requests,
+                "waf_events": self.waf_events, "cooldowns": self.cooldowns}
 
 
 class RobotsCache:
@@ -632,6 +619,8 @@ class OnPageAuditEngine:
         image_concurrency: int = 10,
         image_discard_body_limit: int = 64 * 1024,
         max_connections: Optional[int] = None,
+        host_budgets: Optional[Dict[str, Any]] = None,
+        host_budget_cooldown_sec: float = 60.0,
     ):
         self.db_path = db_path
         self.job_id = job_id or str(uuid.uuid4())
@@ -668,6 +657,16 @@ class OnPageAuditEngine:
         self.image_concurrency = max(1, int(image_concurrency))
         self.image_discard_body_limit = image_discard_body_limit
         self.max_connections = max_connections
+        # Per-host budgets: {"cms-assets.bajajfinserv.in": 10} or {".cdn.example": {"rps": 8, "max_rps": 12}}
+        # (a leading '.' matches the domain and all its subdomains). Primary hosts always use the primary budget.
+        self.host_budgets: Dict[str, HostRateBudget] = {}
+        for key, cfg in (host_budgets or {}).items():
+            cfg = cfg if isinstance(cfg, dict) else {"rps": float(cfg)}
+            k = key.lower().strip()
+            self.host_budgets[k] = HostRateBudget(
+                k, cfg["rps"], cfg.get("max_rps"), cfg.get("min_rps", 1.0),
+                cfg.get("cooldown_sec", host_budget_cooldown_sec), waf_cooldown_threshold,
+                rps_increase_step, rps_increase_window)
 
         # ---- Image registry (separate cache from page/link validation) ----
         self._img_state: Dict[str, str] = {}
@@ -1045,6 +1044,18 @@ class OnPageAuditEngine:
             host == self.primary_domain or host.endswith("." + self.primary_domain)
         )
 
+    def _budget_for(self, url: str) -> Optional["HostRateBudget"]:
+        if not self.host_budgets or self._is_primary_host(url):
+            return None
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        b = self.host_budgets.get(host)
+        if b is not None:
+            return b
+        for k, b in self.host_budgets.items():
+            if k.startswith(".") and (host == k[1:] or host.endswith(k)):
+                return b
+        return None
+
     async def _get_host_sem(self, url: str) -> asyncio.Semaphore:
         host = (urllib.parse.urlsplit(url).hostname or "unknown").lower()
         sem = self._host_sems.get(host)
@@ -1283,6 +1294,10 @@ class OnPageAuditEngine:
                         if (is_primary and _hop == 0) or (_hop > 0 and self._is_primary_host(current_url)):
                             await self._acquire_primary_pace()
                             m["primary_requests_by_kind"][kind] += 1
+                        else:
+                            hb = self._budget_for(current_url)
+                            if hb is not None:
+                                await hb.acquire()          # this host's own budget (never the primary one)
 
                         t_req = time.perf_counter()
                         m["http_requests"] += 1
@@ -1375,6 +1390,7 @@ class OnPageAuditEngine:
 
         waf_diag = None
         is_primary_waf = False
+        is_budget_waf = False
         if not error_type and final_status in (403, 429):
             waf_diag = Diagnostics403.classify(
                 status_code=final_status,
@@ -1391,6 +1407,16 @@ class OnPageAuditEngine:
                 "RATE_LIMITED",
             ):
                 is_primary_waf = True
+            elif not is_primary and waf_diag.get("classification") in (
+                "CDN_WAF_BLOCKED_OR_CHALLENGED", "BOT_DETECTION_CHALLENGE", "RATE_LIMITED",
+            ) and self._budget_for(final_url or url) is not None:
+                is_budget_waf = True
+                self._budget_for(final_url or url).note_waf()
+
+        if not is_budget_waf and final_status is not None and final_status < 500 and final_status != 429:
+            hb_ok = self._budget_for(final_url or url)
+            if hb_ok is not None:
+                hb_ok.note_ok()
 
         term, bkt, scls, rem, waf_st = classify_http_outcome(
             initial_status=initial_status,
@@ -1421,6 +1447,7 @@ class OnPageAuditEngine:
             "waf_status": waf_st,
             "html": html_text if need_body else "",
             "is_primary_waf": is_primary_waf,
+            "is_budget_waf": is_budget_waf,
             "content_length": int(resp_headers.get("content-length")) if str(resp_headers.get("content-length", "")).isdigit() else None,
         }
 
@@ -1999,6 +2026,7 @@ class OnPageAuditEngine:
             "network_errors": m["network_errors"],
             "status_403": m["status_403"],
             "status_429": m["status_429"],
+            "host_budgets": {k: b.snapshot() for k, b in self.host_budgets.items()},
         }
 
     _MIRROR_KEYS = (
@@ -2569,6 +2597,7 @@ class OnPageAuditEngine:
             "primary_requests_by_kind": dict(m["primary_requests_by_kind"]),
             "request_rate_by_kind": {k: round(v / elapsed, 2) for k, v in m["requests_by_kind"].items()},
             "robots_blocked": m["robots_blocked"],
+            "host_budgets": {k: b.snapshot() for k, b in self.host_budgets.items()},
         }
 
     def _write_progress_json(self, stats: Dict[str, Any]):
@@ -2877,8 +2906,8 @@ class OnPageAuditEngine:
                         norm_src = item["normalized_source_url"]
                         res = await self.fetch_url_manual_redirects(client, norm_src, need_body=True, kind="source")
                         self.metrics["source_fetches"] += 1
-                        if res["is_primary_waf"]:
-                            trigger = self._note_primary_waf()
+                        if res["is_primary_waf"] or res.get("is_budget_waf"):
+                            trigger = self._note_primary_waf() if res["is_primary_waf"] else False
                             if item["waf_requeues"] < 2:
                                 item["waf_requeues"] += 1
                                 requeue_sources.append(item)
@@ -3104,8 +3133,8 @@ class OnPageAuditEngine:
                             continue
                         res = await self.fetch_url_manual_redirects(client, url, need_body=False, kind="url")
                         self.metrics["dest_validations"] += 1
-                        if res["is_primary_waf"]:
-                            trigger = self._note_primary_waf()
+                        if res["is_primary_waf"] or res.get("is_budget_waf"):
+                            trigger = self._note_primary_waf() if res["is_primary_waf"] else False
                             if item["waf_requeues"] < 2:
                                 item["waf_requeues"] += 1
                                 if trigger:
@@ -3148,8 +3177,8 @@ class OnPageAuditEngine:
                         res = await self.fetch_url_manual_redirects(client, url, need_body=False, kind="image",
                                                                     discard_limit=self.image_discard_body_limit)
                         self.metrics["image_validations"] += 1
-                        if res["is_primary_waf"]:
-                            trigger = self._note_primary_waf()
+                        if res["is_primary_waf"] or res.get("is_budget_waf"):
+                            trigger = self._note_primary_waf() if res["is_primary_waf"] else False
                             if item["waf_requeues"] < 2:
                                 item["waf_requeues"] += 1
                                 if trigger:
@@ -3238,6 +3267,10 @@ class OnPageAuditEngine:
                         raise
                 parse_pool.shutdown(wait=False)
                 self._write_q = None
+                for hb in self.host_budgets.values():
+                    if hb._cooldown_task is not None and not hb._cooldown_task.done():
+                        hb._cooldown_task.cancel()
+                    hb._gate.set()
 
         perf = self.performance_summary()
         if max_source_pages_this_run is not None or self._stop_requested:

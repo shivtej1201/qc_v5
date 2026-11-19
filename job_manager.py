@@ -77,10 +77,15 @@ class JobManager:
                 filepath, chunksize=chunk_size, dtype=str, keep_default_na=False, na_filter=False,
                 header=None if self._csv_first_line_is_url(filepath) else "infer",
             )
+            url_col = None
             for frame in reader:
-                url_col = self._find_url_col(frame)
                 if url_col is None:
-                    return
+                    # Detect the URL column ONCE (header names, else the first chunk's sample) and keep it:
+                    # re-detecting per chunk silently ended the file at the first chunk that happened to
+                    # start with non-URL cells, dropping every remaining row.
+                    url_col = self._find_url_col(frame)
+                    if url_col is None:
+                        return
                 urls = [str(value).strip() for value in frame[url_col] if pd.notna(value) and str(value).strip()]
                 for start in range(0, len(urls), chunk_size):
                     yield urls[start:start + chunk_size]
@@ -369,6 +374,12 @@ class JobManager:
             ))[0]
             total_processed = done_items or 0
             pending_items = pending_items or 0
+            if pending_items and completed_batches + failed_batches == total_batches:
+                # all batches finished but rows still pending: heal stranded duplicates before judging
+                healed = await self.db.heal_pending_duplicates(job_id)
+                if healed:
+                    total_processed += healed
+                    pending_items -= healed
 
         if job_status not in ['PAUSED', 'CANCELLED']:
             if completed_batches + failed_batches == total_batches:

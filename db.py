@@ -510,7 +510,7 @@ class Database:
         await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_jui_state ON job_url_items(job_id, item_state, validation_source, outcome, validated)")
 
         # On-page image audit tables/columns (additive; same DDL the engine applies)
-        from on_page_audit_engine import ON_PAGE_IMAGE_SCHEMA_SQL, ON_PAGE_IMAGE_ALTERS
+        from on_page_schema import ON_PAGE_IMAGE_SCHEMA_SQL, ON_PAGE_IMAGE_ALTERS
         await self.conn.executescript(ON_PAGE_IMAGE_SCHEMA_SQL)
         for stmt in ON_PAGE_IMAGE_ALTERS:
             try:
@@ -2182,12 +2182,32 @@ class Database:
                 await self.conn.commit()
                 return done
             except aiosqlite.OperationalError as e:
-                await self.conn.rollback()
+                # No rollback(): this connection is shared by the daemon, job manager and API, and a
+                # rollback would silently discard THEIR uncommitted writes. Every statement above is
+                # idempotent (guarded by item_state = 'PENDING' / UPSERT), so simply re-running is safe.
                 if ("locked" in str(e).lower() or "busy" in str(e).lower()) and attempt < 5:
                     attempt += 1
                     await asyncio.sleep(0.2 * attempt)
                     continue
                 raise
+
+    async def heal_pending_duplicates(self, job_id: str) -> int:
+        """Copy the result of every DONE canonical row onto its still-PENDING DUPLICATE rows.
+        The canonical and duplicate updates are separate statements on a shared connection, so a crash
+        between them (after another coroutine's commit) could otherwise strand duplicates forever.
+        Idempotent; touches only PENDING duplicates (normally zero rows)."""
+        cols = self._URL_ITEM_RESULT_COLS
+        sets = ", ".join(f"{c} = (SELECT c.{c} FROM job_url_items c WHERE c.job_id = d.job_id AND c.row_no = d.duplicate_of_row)"
+                         for c in cols)
+        cur = await self.conn.execute(
+            f"""UPDATE job_url_items AS d SET {sets}, item_state = 'DONE'
+                 WHERE d.job_id = ? AND d.validation_source = 'DUPLICATE' AND d.item_state = 'PENDING'
+                   AND EXISTS (SELECT 1 FROM job_url_items c WHERE c.job_id = d.job_id
+                                 AND c.row_no = d.duplicate_of_row AND c.item_state = 'DONE')""",
+            (job_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount
 
     async def batch_insert_results_no_commit(self, results: List[Dict[str, Any]]):
         for r in results:
