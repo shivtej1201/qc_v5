@@ -1,0 +1,443 @@
+"""
+QC V5 — On-page URL + image audit service (used by the API / dashboard).
+
+Each audit runs as an isolated worker process (run_on_page_audit.py) so a crash can never take the
+API down and every run is checkpointed/resumable. This module owns:
+
+  * presets + duration estimates (measured performance model, see docs/architecture)
+  * start / stop (graceful, cross-platform stop-file) / resume
+  * ONE active run per primary domain (two crawls would double the request rate the WAF sees)
+  * reading the finished package for the dashboard (issue summary, issue rows, worst pages)
+  * "smart insights": plain-language findings computed from live metrics + issue summaries
+
+Dependency-light on purpose (no psutil/httpx imports) so the API process stays lean.
+"""
+import csv
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.parse
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+JOB_ID_RE = re.compile(r"^onpage_[a-f0-9]{12}$")
+
+# Measured on the 10K benchmark (docs/performance/ON_PAGE_10K_URL_IMAGE_AUDIT.md):
+#   primary-budget requests per source page = 10,732 / 10,000 (page + non-source links + robots)
+#   unique images per page on the simulated PDP model = 6.03; fixed overhead ~ 20 s + 1.9 ms/page packaging
+PRIMARY_REQ_PER_PAGE = 1.0732
+IMAGES_PER_PAGE = 6.03
+FIXED_OVERHEAD_SEC = 20.0
+PACKAGE_SEC_PER_PAGE = 0.0019
+
+PRESETS: Dict[str, Dict[str, Any]] = {
+    "conservative": {
+        "label": "Conservative", "description": "8 req/s on the primary domain. Safest for a WAF you have not measured.",
+        "target_rps": 8.0, "max_rps": 10.0, "source_concurrency": 10, "dest_concurrency": 20, "image_concurrency": 10,
+    },
+    "target": {
+        "label": "15-20 min target", "description": "12 req/s: 10K pages in ~15 min IF the edge sustains 12 req/s.",
+        "target_rps": 12.0, "max_rps": 12.0, "source_concurrency": 20, "dest_concurrency": 20, "image_concurrency": 30,
+    },
+    "max_tested": {
+        "label": "Max tested", "description": "14 req/s: fastest stable rate on the simulated Akamai model (~13 min / 10K).",
+        "target_rps": 14.0, "max_rps": 14.0, "source_concurrency": 20, "dest_concurrency": 20, "image_concurrency": 30,
+    },
+}
+TUNABLE_KEYS = {"target_rps": float, "max_rps": float, "min_rps": float, "source_concurrency": int,
+                "dest_concurrency": int, "image_concurrency": int, "per_host_concurrency": int,
+                "primary_domain": str, "read_timeout": float, "max_retries": int}
+
+
+def _utc() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def estimate_duration(pages: int, rps: float, images_on_primary: bool = False,
+                      images_per_page: float = IMAGES_PER_PAGE) -> Dict[str, Any]:
+    """Predicted wall-clock for an audit, from the measured request model. The primary rate budget is
+    the binding constraint, so time = primary requests / rps + overhead."""
+    pages = max(0, int(pages))
+    rps = max(0.1, float(rps))
+    primary_req = pages * PRIMARY_REQ_PER_PAGE + (pages * images_per_page if images_on_primary else 0)
+    crawl = primary_req / rps + FIXED_OVERHEAD_SEC
+    total = crawl + pages * PACKAGE_SEC_PER_PAGE
+    minutes = total / 60.0
+    needed_for_20 = primary_req / max(1.0, 20 * 60 - FIXED_OVERHEAD_SEC - pages * PACKAGE_SEC_PER_PAGE)
+    return {
+        "pages": pages, "rps": rps, "images_on_primary": images_on_primary,
+        "primary_requests": round(primary_req), "estimated_seconds": round(total), "estimated_minutes": round(minutes, 1),
+        "meets_20_min_target": minutes <= 20.0,
+        "rps_needed_for_20_min": round(needed_for_20, 1),
+        "basis": "measured 10K benchmark request model; real edge latency/WAF limits can only lower throughput",
+    }
+
+
+class AuditConflict(Exception):
+    pass
+
+
+class OnPageAuditService:
+    def __init__(self, db_path: str, base_dir: Optional[str] = None, reports_dir: Optional[str] = None,
+                 python: str = sys.executable, allow_local: bool = False):
+        self.db_path = os.path.abspath(db_path)
+        self.base_dir = os.path.abspath(base_dir or os.path.join(ROOT, "data", "onpage"))
+        self.reports_dir = os.path.abspath(reports_dir or os.path.join(ROOT, "reports", "onpage"))
+        self.python = python
+        self.allow_local = allow_local
+        self.procs: Dict[str, subprocess.Popen] = {}
+        self._issue_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        os.makedirs(self.base_dir, exist_ok=True)
+        os.makedirs(self.reports_dir, exist_ok=True)
+
+    # ------------------------------------------------------------------ paths / metadata
+    def _dir(self, job_id: str) -> str:
+        if not JOB_ID_RE.match(job_id or ""):
+            raise ValueError("invalid job id")
+        return os.path.join(self.base_dir, job_id)
+
+    def _meta(self, job_id: str) -> Dict[str, Any]:
+        p = os.path.join(self._dir(job_id), "config.json")
+        if not os.path.exists(p):
+            raise KeyError(job_id)
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _save_meta(self, job_id: str, meta: Dict[str, Any]):
+        p = os.path.join(self._dir(job_id), "config.json")
+        with open(p + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        os.replace(p + ".tmp", p)
+
+    def package_dir(self, job_id: str) -> str:
+        return os.path.join(self.reports_dir, job_id, "QC_V5_ONPAGE_AUDIT")
+
+    def package_zip(self, job_id: str) -> str:
+        return os.path.join(self.reports_dir, job_id, "QC_V5_ONPAGE_AUDIT.zip")
+
+    def list_jobs(self) -> List[Dict[str, Any]]:
+        out = []
+        for name in sorted(os.listdir(self.base_dir)):
+            if JOB_ID_RE.match(name):
+                try:
+                    out.append(self.describe(name))
+                except (KeyError, ValueError, OSError):
+                    continue
+        return sorted(out, key=lambda j: j.get("created_at", ""), reverse=True)
+
+    # ------------------------------------------------------------------ process control
+    def _alive(self, job_id: str) -> bool:
+        p = self.procs.get(job_id)
+        if p is not None:
+            return p.poll() is None
+        pid_file = os.path.join(self._dir(job_id), "worker.pid")
+        if not os.path.exists(pid_file):
+            return False
+        try:
+            pid = int(open(pid_file).read().strip())
+            if os.name == "nt":
+                return False          # cannot probe safely without psutil; resume is always possible
+            os.kill(pid, 0)
+            return True
+        except (ValueError, OSError):
+            return False
+
+    def run_state(self, job_id: str) -> str:
+        d = self._dir(job_id)
+        if self._alive(job_id):
+            return "STOPPING" if os.path.exists(os.path.join(d, "STOP")) else "RUNNING"
+        res = self.result(job_id)
+        if res:
+            return res.get("status") or "FINISHED"
+        return "INTERRUPTED" if os.path.exists(os.path.join(d, "worker.pid")) else "QUEUED"
+
+    def result(self, job_id: str) -> Optional[Dict[str, Any]]:
+        p = os.path.join(self._dir(job_id), "result.json")
+        if not os.path.exists(p):
+            return None
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def describe(self, job_id: str) -> Dict[str, Any]:
+        meta = self._meta(job_id)
+        res = self.result(job_id) or {}
+        return {
+            **{k: meta.get(k) for k in ("job_id", "name", "created_at", "preset", "config", "url_count", "primary_domain")},
+            "run_state": self.run_state(job_id),
+            "final_qc_status": res.get("final_qc_status"),
+            "crawl_seconds": res.get("crawl_seconds"),
+            "package_available": os.path.exists(self.package_zip(job_id)),
+            "estimate": estimate_duration(meta.get("url_count", 0), (meta.get("config") or {}).get("target_rps", 8.0)),
+        }
+
+    def _active_for_domain(self, domain: str) -> Optional[str]:
+        for name in os.listdir(self.base_dir):
+            if JOB_ID_RE.match(name) and self._alive(name):
+                try:
+                    if self._meta(name).get("primary_domain") == domain:
+                        return name
+                except (KeyError, ValueError, OSError):
+                    continue
+        return None
+
+    def start(self, name: str, urls: Iterable[str], preset: str = "conservative",
+              overrides: Optional[Dict[str, Any]] = None, primary_domain: Optional[str] = None,
+              extra_args: Optional[List[str]] = None) -> Dict[str, Any]:
+        if preset not in PRESETS:
+            raise ValueError(f"unknown preset {preset!r}; choose one of {sorted(PRESETS)}")
+        clean, seen = [], set()
+        for u in urls:
+            u = (u or "").strip()
+            if u and u not in seen:
+                seen.add(u)
+                clean.append(u)
+        if not clean:
+            raise ValueError("no URLs supplied")
+        config = {k: v for k, v in PRESETS[preset].items() if k in TUNABLE_KEYS}
+        for k, v in (overrides or {}).items():
+            if k in TUNABLE_KEYS and v not in (None, ""):
+                config[k] = TUNABLE_KEYS[k](v)
+        if config.get("max_rps", 0) < config["target_rps"]:
+            config["max_rps"] = config["target_rps"]
+        domain = (primary_domain or config.get("primary_domain") or "").strip().lower()
+        if not domain:
+            host = (urllib.parse.urlsplit(clean[0]).hostname or "").lower()
+            parts = host.split(".")
+            domain = ".".join(parts[-3:]) if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "gov", "edu") else ".".join(parts[-2:]) if len(parts) >= 2 else host
+        config["primary_domain"] = domain
+        busy = self._active_for_domain(domain)
+        if busy:
+            raise AuditConflict(f"audit {busy} is already crawling {domain}; one active crawl per domain "
+                                f"(a second would double the request rate the WAF sees)")
+        job_id = f"onpage_{uuid.uuid4().hex[:12]}"
+        d = self._dir(job_id)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "urls.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(clean))
+        meta = {"job_id": job_id, "name": (name or "On-page audit").strip()[:120], "created_at": _utc(),
+                "preset": preset, "config": config, "url_count": len(clean), "primary_domain": domain,
+                "extra_args": list(extra_args or [])}
+        self._save_meta(job_id, meta)
+        self._spawn(job_id, meta)
+        return self.describe(job_id)
+
+    def _spawn(self, job_id: str, meta: Dict[str, Any]):
+        d = self._dir(job_id)
+        c = meta["config"]
+        for f in ("STOP", "result.json"):
+            try:
+                os.remove(os.path.join(d, f))
+            except FileNotFoundError:
+                pass
+        args = [self.python, os.path.join(ROOT, "run_on_page_audit.py"),
+                "--urls", os.path.join(d, "urls.txt"), "--db", self.db_path, "--job-id", job_id,
+                "--job-name", meta["name"], "--out-dir", os.path.join(self.reports_dir, job_id),
+                "--package-name", "QC_V5_ONPAGE_AUDIT", "--primary-domain", c["primary_domain"],
+                "--target-rps", str(c["target_rps"]), "--max-rps", str(c.get("max_rps", c["target_rps"])),
+                "--source-concurrency", str(c["source_concurrency"]), "--dest-concurrency", str(c["dest_concurrency"]),
+                "--image-concurrency", str(c["image_concurrency"]),
+                "--stop-file", os.path.join(d, "STOP"), "--result-json", os.path.join(d, "result.json")]
+        for k, flag in (("min_rps", "--min-rps"), ("per_host_concurrency", "--per-host-concurrency"),
+                        ("read_timeout", "--read-timeout"), ("max_retries", "--max-retries")):
+            if k in c:
+                args += [flag, str(c[k])]
+        if self.allow_local:
+            args.append("--allow-local")
+        args += meta.get("extra_args") or []
+        log = open(os.path.join(d, "worker.log"), "a", encoding="utf-8")
+        log.write(f"\n=== {_utc()} start {' '.join(args[1:4])} ...\n")
+        log.flush()
+        creation = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)} if os.name == "nt" else {}
+        proc = subprocess.Popen(args, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **creation)
+        self.procs[job_id] = proc
+        with open(os.path.join(d, "worker.pid"), "w") as f:
+            f.write(str(proc.pid))
+
+    def stop(self, job_id: str) -> Dict[str, Any]:
+        """Graceful: in-flight requests finish and are committed; the job stays resumable."""
+        d = self._dir(job_id)
+        self._meta(job_id)
+        if self._alive(job_id):
+            open(os.path.join(d, "STOP"), "w").close()
+        return self.describe(job_id)
+
+    def resume(self, job_id: str) -> Dict[str, Any]:
+        meta = self._meta(job_id)
+        if self._alive(job_id):
+            raise AuditConflict(f"audit {job_id} is already running")
+        busy = self._active_for_domain(meta["primary_domain"])
+        if busy:
+            raise AuditConflict(f"audit {busy} is already crawling {meta['primary_domain']}")
+        self._spawn(job_id, meta)
+        return self.describe(job_id)
+
+    def wait(self, job_id: str, timeout: float = 600.0) -> str:
+        end = time.time() + timeout
+        while time.time() < end and self._alive(job_id):
+            time.sleep(0.3)
+        return self.run_state(job_id)
+
+    def log_tail(self, job_id: str, lines: int = 40) -> List[str]:
+        p = os.path.join(self._dir(job_id), "worker.log")
+        if not os.path.exists(p):
+            return []
+        with open(p, encoding="utf-8", errors="replace") as f:
+            return [l.rstrip("\n") for l in f.readlines()[-lines:]]
+
+    # ------------------------------------------------------------------ finished-report access
+    def _csv(self, job_id: str, name: str) -> str:
+        p = os.path.join(self.package_dir(job_id), name)
+        if not os.path.exists(p):
+            raise FileNotFoundError(name)
+        return p
+
+    def issue_overview(self, job_id: str) -> Dict[str, Any]:
+        """Issue summary + severity totals + top offending URLs (cached per package mtime)."""
+        p12 = self._csv(job_id, "12_issues.csv")
+        mtime = os.path.getmtime(p12)
+        cached = self._issue_cache.get(job_id)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        with open(self._csv(job_id, "13_issue_summary.csv"), newline="", encoding="utf-8") as f:
+            types = [dict(r, relationships=int(r["relationships"]), unique_urls=int(r["unique_urls"]),
+                          source_pages_affected=int(r["source_pages_affected"])) for r in csv.DictReader(f)]
+        sev = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+        url_counts: Dict[Tuple[str, str], int] = {}
+        with open(p12, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                sev[r["severity"]] = sev.get(r["severity"], 0) + 1
+                if r["severity"] == "HIGH" and r["category"] != "SOURCE_PAGE":
+                    k = (r["normalized_url"], r["issue_type"])
+                    url_counts[k] = url_counts.get(k, 0) + 1
+        top_urls = sorted(url_counts.items(), key=lambda kv: -kv[1])[:10]
+        with open(self._csv(job_id, "01_summary.csv"), newline="", encoding="utf-8") as f:
+            summary = {r["metric"]: r["value"] for r in csv.DictReader(f)}
+        data = {"by_severity": sev, "types": types, "total": sum(sev.values()), "summary": summary,
+                "top_high_urls": [{"url": u, "issue_type": t, "relationships": n} for (u, t), n in top_urls]}
+        self._issue_cache[job_id] = (mtime, data)
+        return data
+
+    def issues(self, job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
+               category: Optional[str] = None, search: Optional[str] = None, offset: int = 0,
+               limit: int = 100) -> Dict[str, Any]:
+        """Filtered page of 12_issues.csv (streamed; bounded memory)."""
+        limit = max(1, min(int(limit), 1000))
+        offset = max(0, int(offset))
+        s = (search or "").lower().strip()
+        items, matched = [], 0
+        with open(self._csv(job_id, "12_issues.csv"), newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                if severity and r["severity"] != severity:
+                    continue
+                if issue_type and r["issue_type"] != issue_type:
+                    continue
+                if category and r["category"] != category:
+                    continue
+                if s and s not in (r["source_page_url"] + " " + r["normalized_url"] + " " + r["found_url"]).lower():
+                    continue
+                if offset <= matched < offset + limit:
+                    items.append(r)
+                matched += 1
+        return {"items": items, "matched": matched, "offset": offset, "limit": limit}
+
+    def worst_pages(self, job_id: str, limit: int = 25) -> List[Dict[str, Any]]:
+        out = []
+        with open(self._csv(job_id, "14_page_issue_summary.csv"), newline="", encoding="utf-8") as f:
+            for i, r in enumerate(csv.DictReader(f)):
+                if i >= max(1, min(int(limit), 500)):
+                    break
+                out.append(r)
+        return out
+
+    # ------------------------------------------------------------------ smart insights
+    def insights(self, job_id: str, stats: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Plain-language findings, most important first. Every number is computed, never invented."""
+        meta = self._meta(job_id)
+        cfg = meta.get("config") or {}
+        out: List[Dict[str, Any]] = []
+        stats = stats or {}
+        live = stats.get("live_metrics") if isinstance(stats.get("live_metrics"), dict) else {}
+        total = int(stats.get("source_pages_total") or meta.get("url_count") or 0)
+        done = int(stats.get("source_pages_processed") or 0)
+        state = self.run_state(job_id)
+
+        if state in ("RUNNING", "STOPPING") and live:
+            el = float(live.get("elapsed_sec") or 0)
+            pps = float(live.get("source_pages_per_sec") or 0)
+            if pps > 0 and total:
+                projected = (el + (total - done) / pps) / 60.0
+                kind = "success" if projected <= 20 else "warning"
+                rps = float(live.get("primary_requests_per_sec") or 0)
+                msg = f"Projected total {projected:.1f} min at {pps:.1f} pages/s ({rps:.1f} req/s on {cfg.get('primary_domain')})."
+                if projected > 20:
+                    est = estimate_duration(total, cfg.get("target_rps", 8))
+                    msg += f" The 15-20 min target needs ~{est['rps_needed_for_20_min']} req/s sustained; the rate budget, not the code, is the limit."
+                out.append({"kind": kind, "title": "Time to finish", "message": msg})
+            src_r, url_r = float(live.get("source_request_rate") or 0), float(live.get("url_request_rate") or 0)
+            if src_r + url_r > 0 and url_r / (src_r + url_r) > 0.25:
+                share = 100.0 * url_r / (src_r + url_r)
+                out.append({"kind": "warning", "title": "Link checks are sharing the budget",
+                            "message": f"{share:.0f}% of primary-domain requests are validating links that are NOT in this sitemap "
+                                       f"(the estimate assumes ~7%). Pages link to many URLs outside the audited set, so the run "
+                                       f"takes longer; include those pages in the sitemap list or accept the longer time."})
+            if int(live.get("waf_events") or 0) or int(live.get("cooldowns") or 0):
+                out.append({"kind": "danger", "title": "WAF pushback",
+                            "message": f"{live.get('waf_events')} WAF responses, {live.get('cooldowns')} cooldown(s); throttle now {live.get('current_target_rps')} req/s. Do not raise the rate."})
+        elif not stats.get("source_pages_total"):
+            est = estimate_duration(meta.get("url_count", 0), cfg.get("target_rps", 8))
+            out.append({"kind": "info", "title": "Estimate",
+                        "message": f"{meta.get('url_count')} pages at {cfg.get('target_rps')} req/s: ~{est['estimated_minutes']} min."})
+
+        try:
+            ov = self.issue_overview(job_id)
+        except FileNotFoundError:
+            ov = None
+        if ov:
+            sev = ov["by_severity"]
+            high_types = [t for t in ov["types"] if t["severity"] == "HIGH"]
+            if sev["HIGH"] == 0:
+                out.append({"kind": "success", "title": "No high-severity issues", "message": "Nothing is broken for users or search engines."})
+            else:
+                top = sorted(high_types, key=lambda t: -t["relationships"])[0]
+                share = 100.0 * top["relationships"] / max(1, sev["HIGH"])
+                out.append({"kind": "danger", "title": f"Fix first: {top['issue_type']}",
+                            "message": f"{top['relationships']:,} high-severity rows ({share:.0f}% of all HIGH) come from only {top['unique_urls']:,} unique URL(s) on {top['source_pages_affected']:,} page(s). {top['recommended_action']}"})
+            if ov["top_high_urls"]:
+                t10 = sum(u["relationships"] for u in ov["top_high_urls"])
+                out.append({"kind": "info", "title": "Biggest wins",
+                            "message": f"Fixing the top {len(ov['top_high_urls'])} URLs clears {t10:,} of {sev['HIGH']:,} high-severity rows ({100.0 * t10 / max(1, sev['HIGH']):.0f}%)."})
+            waf = next((t for t in ov["types"] if t["issue_type"] in ("WAF_BLOCKED", "IMAGE_WAF_BLOCKED", "SOURCE_WAF_BLOCKED")), None)
+            if waf:
+                out.append({"kind": "warning", "title": "Results hidden by the WAF",
+                            "message": f"{waf['unique_urls']:,} URL(s) were blocked by the CDN/WAF, so their real status is unknown. Re-run from an allow-listed IP or at a lower rate."})
+            qc = ov["summary"].get("final_qc_status")
+            out.append({"kind": "success" if qc == "PASS" else "danger", "title": f"Reconciliation {qc}",
+                        "message": "Every relationship, validation and CSV row reconciles with the database." if qc == "PASS"
+                        else "The trust gate found a discrepancy; see 11_reconciliation.csv before using this report."})
+        order = {"danger": 0, "warning": 1, "info": 2, "success": 3}
+        return sorted(out, key=lambda i: order.get(i["kind"], 9))
+
+    def health_score(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """% of source pages without any HIGH issue (simple, explainable)."""
+        try:
+            path = self._csv(job_id, "14_page_issue_summary.csv")
+            summary = self.issue_overview(job_id)["summary"]
+        except FileNotFoundError:
+            return None
+        pages_total = int(summary.get("source_pages_total") or 0)
+        with_high = 0
+        with open(path, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                if int(r["high"] or 0) > 0:
+                    with_high += 1
+        score = round(100.0 * (pages_total - with_high) / pages_total, 1) if pages_total else None
+        return {"score": score, "pages_total": pages_total, "pages_with_high_issues": with_high,
+                "definition": "share of source pages with no HIGH-severity issue"}
