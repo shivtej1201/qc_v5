@@ -362,6 +362,14 @@ def classify_http_outcome(
                 "Redirect Loop / Excessive Redirects",
                 "NONE",
             )
+        if error_type in ("Redirect Without Location", "Invalid Redirect Target"):
+            return (
+                "FAILED",
+                "Other errors",
+                error_type,
+                f"{error_type} — {error_message[:140] if error_message else 'broken redirect'}",
+                "NONE",
+            )
         return (
             "FAILED",
             "Other errors",
@@ -446,6 +454,7 @@ def classify_http_outcome(
     return ("FAILED", "Other errors", cat or "Unknown", f"Unexpected HTTP Status ({final_status})", waf_status)
 
 
+from request_errors import classify_request_exception  # noqa: E402
 from on_page_schema import ON_PAGE_IMAGE_ALTERS, ON_PAGE_IMAGE_SCHEMA_SQL, ensure_on_page_image_schema  # noqa: E402,F401
 
 
@@ -601,6 +610,7 @@ class OnPageAuditEngine:
         read_timeout: Optional[float] = None,
         batch_size: int = 250,
         progress_json_path: Optional[str] = None,
+        max_source_bytes: int = 5 * 1024 * 1024,
         # ---- performance / adaptive-control tunables (defaults are conservative) ----
         parse_workers: int = 2,
         flush_interval_sec: float = 1.0,
@@ -639,6 +649,7 @@ class OnPageAuditEngine:
         self.read_timeout = settings.READ_TIMEOUT if read_timeout is None else read_timeout
         self.batch_size = batch_size
         self.progress_json_path = progress_json_path
+        self.max_source_bytes = max(64 * 1024, int(max_source_bytes))
 
         self.parse_workers = max(1, int(parse_workers))
         self.flush_interval_sec = flush_interval_sec
@@ -1255,8 +1266,11 @@ class OnPageAuditEngine:
         host_sem = await self._get_host_sem(url)
         m = self.metrics
 
-        t0 = time.time()
         retries = 0
+        attempts = 0
+        net_ms = 0.0            # network time of the FINAL attempt only (no rate-limit waits / retry sleeps)
+        html_bytes = 0
+        html_truncated = False
         initial_status: Optional[int] = None
         final_status: Optional[int] = None
         final_url = url
@@ -1269,6 +1283,11 @@ class OnPageAuditEngine:
         resp_headers: Dict[str, str] = {}
 
         while retries <= self.max_retries:
+            attempts += 1
+            net_ms = 0.0
+            t_req = None
+            html_bytes = 0
+            html_truncated = False
             current_url = url
             redirect_chain = []
             visited_in_chain = {url}
@@ -1309,14 +1328,24 @@ class OnPageAuditEngine:
                                 location = resp.headers.get("Location") or resp.headers.get("location")
                                 redirect_chain.append({"url": current_url, "status": st})
                                 if not location:
+                                    # A 3xx without Location is a BROKEN redirect (no browser can follow it)
                                     final_status = st
                                     final_url = current_url
                                     content_type = resp.headers.get("content-type", "")
                                     resp_headers = dict(resp.headers)
                                     await self._discard_body(resp, discard_limit)
+                                    error_type = "Redirect Without Location"
+                                    error_message = f"HTTP {st} without a Location header at {current_url}"
+                                    net_ms += (time.perf_counter() - t_req) * 1000.0
                                     break
                                 await self._discard_body(resp, discard_limit)
+                                net_ms += (time.perf_counter() - t_req) * 1000.0
                                 next_url = URLNormalizer.normalize(urllib.parse.urljoin(current_url, location))
+                                if urllib.parse.urlsplit(next_url).scheme.lower() not in ("http", "https"):
+                                    error_type = "Invalid Redirect Target"
+                                    error_message = f"HTTP {st} redirects to a non-HTTP target: {next_url[:200]}"
+                                    final_url = next_url
+                                    break
                                 if next_url in visited_in_chain or len(redirect_chain) >= max_hops:
                                     error_type = "Redirect Loop"
                                     error_message = f"Redirect loop or exceeded {max_hops} hops at {next_url}"
@@ -1331,9 +1360,20 @@ class OnPageAuditEngine:
                                 content_type = resp.headers.get("content-type", "")
                                 resp_headers = dict(resp.headers)
                                 if need_body or st in (403, 429):
-                                    raw_bytes = (await resp.aread())[: settings.MAX_PAYLOAD_SIZE_BYTES]
+                                    # Source pages: read up to max_source_bytes (default 5 MB) and RECORD any
+                                    # truncation instead of silently auditing only the first 1 MB of a page.
+                                    limit = self.max_source_bytes if need_body else 64 * 1024
+                                    buf = bytearray()
+                                    async for chunk in resp.aiter_bytes():
+                                        buf.extend(chunk)
+                                        if len(buf) > limit:
+                                            html_truncated = True
+                                            break
+                                    html_bytes = len(buf)
+                                    raw_bytes = bytes(buf[:limit])
                                 else:
                                     await self._discard_body(resp, discard_limit)
+                                net_ms += (time.perf_counter() - t_req) * 1000.0
                                 self._reservoir_add(m["latencies_ms"], (time.perf_counter() - t_req) * 1000.0)
                                 break
 
@@ -1343,8 +1383,8 @@ class OnPageAuditEngine:
                 elif final_status == 429:
                     m["status_429"] += 1
 
-                if not ssrf_safe or error_type == "Redirect Loop":
-                    break
+                if not ssrf_safe or error_type in ("Redirect Loop", "Redirect Without Location", "Invalid Redirect Target"):
+                    break   # deterministic: a retry cannot change the outcome
                 if final_status in (502, 503, 504) and retries < self.max_retries:
                     retries += 1
                     await asyncio.sleep(1.0 * retries)
@@ -1355,37 +1395,32 @@ class OnPageAuditEngine:
                     continue
                 break
 
-            except httpx.TimeoutException as e:
-                error_type = "Timeout"
-                error_message = str(e)[:200]
-                m["timeouts"] += 1
-                retries += 1
-                if retries <= self.max_retries:
-                    await asyncio.sleep(1.0 * retries)
             except Exception as e:
-                err_l = str(e).lower()
-                if "timeout" in err_l or "timed out" in err_l:
-                    error_type = "Timeout"
+                if t_req is not None:
+                    net_ms += (time.perf_counter() - t_req) * 1000.0
+                # type-based classification (httpx DNS failures never contain the word "dns")
+                error_type = classify_request_exception(e)
+                if error_type == "Redirect Loop":
+                    error_message = str(e)[:200]
+                    break
+                if error_type == "Timeout":
                     m["timeouts"] += 1
-                elif "dns" in err_l or "getaddrinfo" in err_l or "name_not_resolved" in err_l or "resolve" in err_l:
-                    error_type = "DNS Error"
-                elif "ssl" in err_l or "cert" in err_l or "tls" in err_l:
-                    error_type = "SSL Error"
-                elif "connect" in err_l:
-                    error_type = "Connection Error"
                 else:
-                    error_type = "Network Error"
-                if error_type != "Timeout":
                     m["network_errors"] += 1
-                error_message = str(e)[:200]
+                error_message = (str(e) or e.__class__.__name__)[:200]
+                final_status = None
                 retries += 1
                 if retries <= self.max_retries:
                     await asyncio.sleep(1.0 * retries)
 
-        elapsed_ms = round((time.time() - t0) * 1000.0, 2)
+        elapsed_ms = round(net_ms, 2)
         html_text = ""
         if raw_bytes and ("html" in content_type.lower() or not content_type or final_status in (403, 429)):
-            html_text = raw_bytes.decode("utf-8", errors="ignore")
+            cs = re.search(r"charset=([\w\-]+)", content_type, re.IGNORECASE)
+            try:
+                html_text = raw_bytes.decode(cs.group(1) if cs else "utf-8", errors="replace")
+            except LookupError:            # unknown charset label in the header
+                html_text = raw_bytes.decode("utf-8", errors="replace")
         raw_bytes = b""
 
         waf_diag = None
@@ -1448,6 +1483,9 @@ class OnPageAuditEngine:
             "html": html_text if need_body else "",
             "is_primary_waf": is_primary_waf,
             "is_budget_waf": is_budget_waf,
+            "attempts": attempts,
+            "html_bytes": html_bytes,
+            "html_truncated": html_truncated,
             "content_length": int(resp_headers.get("content-length")) if str(resp_headers.get("content-length", "")).isdigit() else None,
         }
 
@@ -1497,6 +1535,10 @@ class OnPageAuditEngine:
             for su in source_updates:
                 su.setdefault("raw_image_occurrences_count", 0)
                 su.setdefault("image_relationships_count", 0)
+                su.setdefault("page_title", "")
+                su.setdefault("html_bytes", 0)
+                su.setdefault("html_truncated", 0)
+                su.setdefault("attempts", 0)
             self.conn.executemany(
                 """
                 UPDATE on_page_source_pages SET
@@ -1520,6 +1562,10 @@ class OnPageAuditEngine:
                     relationships_count = :relationships_count,
                     raw_image_occurrences_count = :raw_image_occurrences_count,
                     image_relationships_count = :image_relationships_count,
+                    page_title = :page_title,
+                    html_bytes = :html_bytes,
+                    html_truncated = :html_truncated,
+                    attempts = :attempts,
                     remark = :remark,
                     checked_at = :checked_at
                 WHERE job_id = :job_id AND source_page_url = :source_page_url
@@ -2541,11 +2587,12 @@ class OnPageAuditEngine:
             source_host = (urllib.parse.urlsplit(final_url or src_url).hostname or "").lower()
             raw_img, img_rels = extract_on_page_images(parser, source_host)   # same Parser instance
         t1, t2, _ = self.classifier.extract_meta_tags(html[:32768], parser=None)
+        title = " ".join((parser.title or "").split())[:300]
         if t1 and t2:
-            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels
+            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title
         clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
         return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
-                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels)
+                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title)
 
     def performance_summary(self) -> Dict[str, Any]:
         m = self.metrics
@@ -2944,9 +2991,10 @@ class OnPageAuditEngine:
                         raw_occ = 0
                         extracted_rels: List[Dict[str, Any]] = []
                         raw_img, extracted_imgs = 0, []
+                        page_title = ""
                         if html:
                             (raw_occ, extracted_rels, biz, pt, clf_method, tag_1, tag_2,
-                             raw_img, extracted_imgs) = await loop.run_in_executor(
+                             raw_img, extracted_imgs, page_title) = await loop.run_in_executor(
                                 parse_pool, self._parse_and_classify, src_url, final_src_url, html
                             )
                         else:
@@ -3094,6 +3142,10 @@ class OnPageAuditEngine:
                             "relationships_count": len(rel_rows),
                             "raw_image_occurrences_count": raw_img,
                             "image_relationships_count": len(img_rows),
+                            "page_title": page_title,
+                            "html_bytes": int(fetch_res.get("html_bytes") or 0),
+                            "html_truncated": 1 if fetch_res.get("html_truncated") else 0,
+                            "attempts": int(fetch_res.get("attempts") or 0),
                             "remark": fetch_res["remark"],
                             "checked_at": now_iso,
                         }

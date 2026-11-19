@@ -21,6 +21,7 @@ ZIP_FILES = sorted([
     "01_summary.csv", "02_source_page_audit.csv", "03_url_audit.csv", "04_unique_url_validation.csv",
     "05_image_audit.csv", "06_unique_image_validation.csv", "07_broken_urls.csv", "08_redirect_urls.csv",
     "09_broken_images.csv", "10_external_urls.csv", "11_reconciliation.csv",
+    "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv",
 ])
 
 
@@ -222,6 +223,36 @@ def test_end_to_end_url_image_dedup_validation_and_csv_zip():
         assert int(summary["total_image_relationships"]) == len(imgs)
         assert int(summary["unique_image_urls"]) == len(ui) == int(summary["new_image_validations"])
         assert int(summary["new_url_validations"]) + int(summary["reused_url_validations"]) == int(summary["http_url_relationships"])
+
+        # ---- actionable issue layer (12/13/14)
+        iss = read_csv(os.path.join(w, "12_issues.csv"))
+        by = {}
+        for r in iss:
+            by.setdefault((r["normalized_url"], r["issue_type"]), []).append(r)
+        def one(path, itype, sev, n=N_SRC):
+            rows = by.get((f"{b}{path}", itype), [])
+            assert len(rows) == n and all(r["severity"] == sev and r["recommended_action"] for r in rows), (path, itype, len(rows))
+        one("/nf", "NOT_FOUND", "HIGH")
+        one("/gone", "GONE", "HIGH")
+        one("/err", "SERVER_ERROR", "HIGH")
+        one("/r301", "REDIRECTED", "LOW")
+        one("/r302", "REDIRECT_TO_BROKEN", "HIGH")
+        one("/slow", "TIMEOUT", "MEDIUM")
+        one("/private/x", "ROBOTS_BLOCKED", "INFO")
+        one("/waf", "WAF_BLOCKED", "MEDIUM")
+        one("/img/broken.png", "IMAGE_NOT_FOUND", "HIGH")
+        one("/img/fake.png", "IMAGE_CONTENT_TYPE_MISMATCH", "HIGH")
+        one("/img/fake.png", "MISSING_ALT", "MEDIUM")
+        assert len([r for r in iss if r["issue_type"] == "INVALID_URL"]) == N_SRC
+        assert not [r for r in iss if r["normalized_url"] == f"{b}/product/123"], "healthy URL must raise no issue"
+        nf = by[(f"{b}/nf", "NOT_FOUND")][0]
+        assert nf["anchor_or_alt_text"] == "c" and nf["source_page_url"].startswith(f"{b}/p/") and nf["http_status"] == "404"
+        summ = {r["issue_type"]: r for r in read_csv(os.path.join(w, "13_issue_summary.csv"))}
+        assert summ["NOT_FOUND"]["unique_urls"] == "1" and summ["NOT_FOUND"]["source_pages_affected"] == str(N_SRC)
+        assert sum(int(r["relationships"]) for r in summ.values()) == len(iss)
+        pages = read_csv(os.path.join(w, "14_page_issue_summary.csv"))
+        assert len(pages) == N_SRC and sum(int(r["total_issues"]) for r in pages) == len(iss)
+        assert int(summary["issues_total"]) == len(iss)
     finally:
         ctx.close()
 
@@ -381,5 +412,74 @@ def test_host_budget_rate_limits_cdn_and_isolates_its_waf():
         assert states == [("VALIDATED", 30)], states
         assert st["performance"]["host_budgets"]["localhost"]["requests"] >= 33
         assert time.time() - t0 < 60
+    finally:
+        ctx.close()
+
+
+def test_source_page_issues_and_validation_detail():
+    """Page-level detail: soft-404, canonical problems, redirecting/404 sitemap URLs, empty pages,
+    missing title, broken redirect (3xx without Location), truncated HTML; response_time excludes the
+    rate-limit wait."""
+    def handler(path):
+        if path == "/robots.txt":
+            return 200, {"Content-Type": "text/plain"}, b"", 0.0
+        page = lambda head, body="<a href='/ok'>x</a>": html_resp(f"<html><head>{head}</head><body>{body}</body></html>")
+        if path == "/good":
+            return page("<title>Good</title><link rel='canonical' href='/good'>")
+        if path == "/soft404":
+            return page("<title>Page Not Found | Shop</title><link rel='canonical' href='/soft404'>")
+        if path == "/nocanon":
+            return page("<title>No canonical</title>")
+        if path == "/twocanon":
+            return page("<title>t</title><link rel='canonical' href='/a'><link rel='canonical' href='/b'>")
+        if path == "/noncanon":
+            return page("<title>t</title><link rel='canonical' href='/good'>")
+        if path == "/moved":
+            return 301, {"Location": "/good"}, b"", 0.0
+        if path == "/dead":
+            return html_resp("gone", 404)
+        if path == "/empty":
+            return page("<title>Empty</title><link rel='canonical' href='/empty'>", body="")
+        if path == "/notitle":
+            return page("<link rel='canonical' href='/notitle'>")
+        if path == "/badredirect":
+            return 302, {}, b"", 0.0
+        if path == "/huge":
+            return page("<title>Huge</title><link rel='canonical' href='/huge'>", body="<p>" + "x" * 200_000 + "</p><a href='/late'>late</a>")
+        return html_resp("<html>ok</html>")
+
+    ctx = Ctx(handler)
+    try:
+        paths = ["/good", "/soft404", "/nocanon", "/twocanon", "/noncanon", "/moved", "/dead", "/empty",
+                 "/notitle", "/badredirect", "/huge"]
+        eng = _engine(ctx, job="SRC", source_concurrency=2, target_rps=4, min_rps=4, max_rps=4,
+                      max_source_bytes=64 * 1024)
+        eng.initialize_inventory(sources_for(ctx.srv.base, paths))
+        st = asyncio.run(eng.run())
+        eng.close()
+        assert st["status"] == "COMPLETED"
+        b = ctx.srv.base
+        rt = dict(q(ctx.db, "SELECT source_page_url, response_time_ms FROM on_page_source_pages WHERE job_id='SRC'"))
+        assert rt[f"{b}/good"] < 500, "response_time must be network time only, not the 250 ms/req rate-limit wait"
+        pkg = build_on_page_csv_package(ctx.db, "SRC", ctx.dir, package_name="SRC")
+        assert pkg["final_qc_status"] == "PASS", [r for r in pkg["reconciliation"] if r["status"] != "PASS"]
+        iss = read_csv(os.path.join(pkg["work_dir"], "12_issues.csv"))
+        page = lambda p: {r["issue_type"] for r in iss if r["source_page_url"] == f"{b}{p}" and r["category"] == "SOURCE_PAGE"
+                          and r["issue_type"] != "CLASSIFICATION_NEEDS_REVIEW"}   # fixtures carry no tag-1/tag-2 meta
+        assert any(r["issue_type"] == "CLASSIFICATION_NEEDS_REVIEW" and r["severity"] == "INFO" for r in iss)
+        assert page("/good") == set()
+        assert "SOFT_404" in page("/soft404")
+        assert "MISSING_CANONICAL" in page("/nocanon")
+        assert "MULTIPLE_CANONICALS" in page("/twocanon")
+        assert "SITEMAP_URL_NOT_CANONICAL" in page("/noncanon")
+        assert "SITEMAP_URL_REDIRECTS" in page("/moved")
+        assert page("/dead") == {"SOURCE_NOT_FOUND"}
+        assert "NO_LINKS_EXTRACTED" in page("/empty")
+        assert "MISSING_TITLE" in page("/notitle")
+        assert page("/badredirect") == {"SOURCE_BROKEN_REDIRECT"}
+        assert "PAGE_TRUNCATED" in page("/huge")
+        src = {r["source_page_url"]: r for r in read_csv(os.path.join(pkg["work_dir"], "02_source_page_audit.csv"))}
+        assert src[f"{b}/huge"]["html_truncated"] == "1" and src[f"{b}/soft404"]["page_title"] == "Page Not Found | Shop"
+        assert src[f"{b}/badredirect"]["crawl_state"] == "FAILED"
     finally:
         ctx.close()

@@ -230,8 +230,20 @@ class ReportGenerator:
         "row_no", "original_url", "normalized_url", "item_state", "outcome", "validated", "status",
         "initial_status_code", "final_status_code", "final_url", "redirect_count", "error_type",
         "error_message", "validation_source", "duplicate_of_row", "attempts", "response_time_ms",
-        "content_type", "check_method", "checked_at",
+        "content_type", "check_method", "checked_at", "severity", "recommended_action",
     ]
+
+    @staticmethod
+    def url_status_row(item: dict, cols) -> list:
+        """One export row; severity/recommended_action are derived from the recorded outcome."""
+        from status_classifier import outcome_action
+        sev, act = ("", "") if item.get("item_state") != "DONE" else outcome_action(
+            item.get("outcome") or "", item.get("final_status_code"), item.get("initial_status_code"),
+            item.get("redirect_count") or 0)
+        if item.get("item_state") != "DONE":
+            sev, act = "HIGH", "No result yet (PENDING). Resume the job."
+        d = dict(item, severity=sev, recommended_action=act)
+        return [sanitize_cell_for_export(d.get(c)) for c in cols]
 
     async def _write_url_status_report(self, job_id: str, output_file: str):
         if await self.db.job_has_url_items(job_id):
@@ -247,8 +259,13 @@ class ReportGenerator:
         ws = workbook.create_sheet(title="URL Status")
         ws.append(cols)
         n = 0
+        sev_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         async for item in self.db.iter_job_url_items(job_id):
-            ws.append([sanitize_cell_for_export(item.get(c)) for c in cols])
+            row = self.url_status_row(item, cols)
+            ws.append(row)
+            sev = row[cols.index("severity")]
+            if sev in sev_counts:
+                sev_counts[sev] += 1
             n += 1
         summary = workbook.create_sheet(title="Summary")
         summary.append(["Metric", "Value"])
@@ -258,6 +275,10 @@ class ReportGenerator:
             summary.append([key, counts.get(key, 0)])
         summary.append(["rows_in_url_status_sheet", n])
         summary.append(["reconciled (rows == total_urls)", "PASS" if n == counts.get("total_urls") else "FAIL"])
+        summary.append([])
+        summary.append(["Issues by severity", "URLs"])
+        for k in ("HIGH", "MEDIUM", "LOW"):
+            summary.append([k, sev_counts[k]])
         summary.append([])
         summary.append(["Outcome", "URLs"])
         for oc, cnt in sorted((counts.get("by_outcome") or {}).items()):

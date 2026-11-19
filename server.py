@@ -429,7 +429,7 @@ async def export_url_status_results_csv(job_id: str):
         w.writerow(cols)
         n = 0
         async for item in db.iter_job_url_items(job_id):
-            w.writerow([sanitize_cell_for_export(item.get(c)) for c in cols])
+            w.writerow(ReportGenerator.url_status_row(item, cols))
             n += 1
             if n % 2000 == 0:
                 yield buf.getvalue()

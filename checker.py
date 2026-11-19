@@ -13,8 +13,7 @@ from diagnostics_403 import Diagnostics403
 from url_normalizer import URLNormalizer
 
 
-class SSRFRedirectBlocked(Exception):
-    """A redirect hop pointed at a prohibited (private / link-local / metadata) address."""
+from request_errors import SSRFRedirectBlocked, classify_request_exception  # noqa: E402,F401
 
 
 async def _ssrf_guard_request_hook(request: httpx.Request):
@@ -25,29 +24,6 @@ async def _ssrf_guard_request_hook(request: httpx.Request):
     safe = await asyncio.to_thread(URLNormalizer.is_safe_url, url, getattr(settings, "ALLOW_LOCAL_TESTING", False))
     if not safe:
         raise SSRFRedirectBlocked(f"Blocked (SSRF): request to prohibited destination {url}")
-
-
-def classify_request_exception(e: BaseException) -> str:
-    """Map a transport exception to a QC V5 error_type using the exception TYPE first and the
-    message only as a tie-breaker (httpx DNS failures say e.g. 'Name or service not known')."""
-    for exc in (e, getattr(e, "__cause__", None), getattr(e, "__context__", None)):
-        if isinstance(exc, SSRFRedirectBlocked):
-            return "Blocked (SSRF)"
-    if isinstance(e, httpx.TooManyRedirects):
-        return "Redirect Loop"
-    if isinstance(e, httpx.TimeoutException):
-        return "Timeout"
-    msg = str(e).lower()
-    if "ssl" in msg or "certificate" in msg or "tls" in msg:
-        return "SSL Error"
-    if any(k in msg for k in ("name or service not known", "nodename nor servname", "getaddrinfo",
-                              "name resolution", "no address associated", "name_not_resolved", "dns")):
-        return "DNS Error"
-    if isinstance(e, httpx.ConnectError) or "connect" in msg or "refused" in msg:
-        return "Connection Error"
-    if "timeout" in msg or "timed out" in msg:
-        return "Timeout"
-    return "Network Error"
 
 
 def _retry_after_seconds(value, default: float = 2.0, cap: float = 30.0) -> float:

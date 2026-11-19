@@ -80,6 +80,11 @@ ON_PAGE_IMAGE_ALTERS = (
     "ALTER TABLE on_page_audit_jobs ADD COLUMN new_image_validations INTEGER DEFAULT 0",
     "ALTER TABLE on_page_audit_jobs ADD COLUMN reused_image_validations INTEGER DEFAULT 0",
     "ALTER TABLE on_page_audit_jobs ADD COLUMN live_metrics TEXT DEFAULT ''",
+    # detailed per-page validation evidence (for the issue report)
+    "ALTER TABLE on_page_source_pages ADD COLUMN page_title TEXT DEFAULT ''",
+    "ALTER TABLE on_page_source_pages ADD COLUMN html_bytes INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_source_pages ADD COLUMN html_truncated INTEGER DEFAULT 0",
+    "ALTER TABLE on_page_source_pages ADD COLUMN attempts INTEGER DEFAULT 0",
 )
 
 

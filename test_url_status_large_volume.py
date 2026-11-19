@@ -219,6 +219,14 @@ def test_every_outcome_class_recorded_with_reason(target, workdir):
             assert got[18]["validation_source"] == "DUPLICATE" and got[18]["duplicate_of_row"] == 1
             assert got[19]["validation_source"] == "DUPLICATE" and got[19]["duplicate_of_row"] == 1
             assert got[8]["attempts"] == 2 and got[9]["attempts"] == 2, "transient failures are retried"
+            cols = ReportGenerator.URL_STATUS_EXPORT_COLUMNS
+            sev = lambda n: ReportGenerator.url_status_row(got[n], cols)[cols.index("severity")]
+            act = lambda n: ReportGenerator.url_status_row(got[n], cols)[cols.index("recommended_action")]
+            assert (sev(1), act(1)) == ("", "")                                   # healthy: no issue
+            assert sev(2) == "LOW" and "final URL" in act(2)                       # 301 -> 200
+            assert sev(3) == "HIGH" and sev(4) == "HIGH" and "404" in act(4)       # redirect to 404, 404
+            assert sev(7) == "HIGH" and sev(9) == "MEDIUM" and sev(14) == "HIGH"   # 500, timeout, DNS
+            assert sev(16) == "MEDIUM" and "valid http" in act(16)                 # invalid entry
             hits = target.hits()
             assert hits.get("/ok/1") == 1, "duplicates must not be re-validated"
             assert hits.get("/flaky/1") == 2 and hits.get("/rl/1") == 2 and hits.get("/se/1") == 1

@@ -51,6 +51,7 @@ def main():
     p.add_argument("--cdn-waf-rps", type=float, default=0.0, help="Akamai model on the CDN host (0=off)")
     p.add_argument("--port", type=int, default=8821)
     p.add_argument("--keep", default="", help="copy the ZIP + summary here")
+    p.add_argument("--keep-dir", default="", help="copy the unzipped CSV folder here")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     a.out = os.path.abspath(a.out)
@@ -92,6 +93,8 @@ def main():
         }
         with open(a.out, "w") as f:
             json.dump(out, f, indent=2, default=str)
+        if a.keep_dir and res.get("package"):
+            shutil.copytree(res["package"]["work_dir"], a.keep_dir, dirs_exist_ok=True)
         if a.keep and res.get("package"):
             os.makedirs(a.keep, exist_ok=True)
             shutil.copy(res["package"]["zip_path"], a.keep)

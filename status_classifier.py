@@ -79,3 +79,42 @@ def classify_outcome(final_status_code, initial_status_code=None, redirect_count
     if 500 <= code <= 599:
         return "SERVER_ERROR", 1
     return "NETWORK_ERROR", 0
+
+
+def outcome_action(outcome: str, final_status_code=None, initial_status_code=None, redirect_count=0):
+    """(severity, recommended_action) for one URL-status result; ('', '') when healthy."""
+    code = final_status_code
+    hops = redirect_count or 0
+    if outcome == "OK":
+        return "", ""
+    if outcome == "REDIRECT":
+        if code is None or code >= 400:
+            return "HIGH", f"Redirects to an error ({initial_status_code} -> {code}). Fix the redirect target or the URL."
+        if hops >= 2:
+            return "MEDIUM", f"Redirect chain of {hops} hops. Point to the final URL and collapse the chain."
+        return "LOW", "Redirects once. Update references to the final URL."
+    if outcome == "CLIENT_ERROR":
+        if code in (404, 410):
+            return "HIGH", f"HTTP {code}: page missing. Restore it, 301 it to a replacement, or remove references."
+        return "HIGH", f"HTTP {code}: fix the URL or the page."
+    if outcome == "BLOCKED":
+        if code == 429:
+            return "MEDIUM", "Rate limited (429): status unknown. Re-validate at a lower request rate."
+        return "MEDIUM", f"HTTP {code or 'challenge'}: access denied or WAF/bot challenge. Verify from an allow-listed IP before acting."
+    if outcome == "SERVER_ERROR":
+        return "HIGH", f"HTTP {code}: server error. Check origin/application logs, then re-validate."
+    if outcome == "TIMEOUT":
+        return "MEDIUM", "No response within the timeout (after retries). Check server performance and re-validate."
+    if outcome == "DNS_ERROR":
+        return "HIGH", "Hostname does not resolve. Fix the domain (typo/retired) or remove the URL."
+    if outcome == "CONNECTION_ERROR":
+        return "HIGH", "Connection refused/failed. Check the host is up and reachable."
+    if outcome == "SSL_ERROR":
+        return "HIGH", "TLS/SSL handshake failed. Fix the certificate/TLS configuration."
+    if outcome == "REDIRECT_LOOP":
+        return "HIGH", "Redirect loop / too many hops. Fix the redirect rules."
+    if outcome == "BLOCKED_SSRF":
+        return "MEDIUM", "Resolves to a private/internal address; blocked for security. Remove internal URLs from the list."
+    if outcome == "INVALID_URL":
+        return "MEDIUM", "Not a valid http(s) URL. Correct the value in the source sheet."
+    return "MEDIUM", "Could not be validated. See error_message and re-run."

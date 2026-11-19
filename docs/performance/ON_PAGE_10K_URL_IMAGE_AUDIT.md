@@ -214,3 +214,59 @@ images ÷ CDN RPS (≈29 min at 35 req/s). Measure the CDN's real safe rate and 
 
 Tests after this change: **111 passed, 17 failed** (the same 17 pre-existing environment failures), plus
 crash-recovery, realtime 8/8, SSRF, and large-upload script suites PASS.
+
+## G. Detailed validation + actionable issue reports
+
+### Validation accuracy fixes (engine)
+
+| Problem found in the deep-dive | Effect before | Now |
+|---|---|---|
+| `response_time_ms` started before rate-limit waits and retry sleeps | A fast page waiting 2 s for its rate slot reported ~2 s; slow-page analysis meaningless | Network time of the final attempt only |
+| Source HTML silently cut at 1 MB (`MAX_PAYLOAD_SIZE_BYTES`) | Links/images after 1 MB on heavy PDPs were never audited, with no trace | Up to `--max-source-bytes` (default 5 MB) is read; anything larger is flagged `html_truncated` → `PAGE_TRUNCATED` (HIGH) |
+| 3xx without `Location` counted as a healthy redirect | Broken redirects hidden in the 3xx bucket | `Redirect Without Location` → FAILED (broken), never retried |
+| Redirect to a non-HTTP target reported as "Blocked (SSRF)" | Misleading cause | `Invalid Redirect Target` |
+| HTML decoded as UTF-8 regardless of declared charset | Garbled titles/anchors on non-UTF-8 pages | Charset from `Content-Type` honored |
+| Engine classified transport errors by string matching | httpx DNS failures ("Name or service not known") landed in "Network Error" | Shared type-based classifier (`request_errors.py`) |
+
+New per-page evidence in `02_source_page_audit.csv`: `page_title`, `html_bytes`, `html_truncated`, `attempts`.
+`03`/`05` also gained `location`, `hop_count`, `error_type`, `error_message`, `status_classification`
+(and `response_time_ms` for URLs).
+
+### Issue reports (in the ZIP, computed on the same streamed pass)
+
+* **`12_issues.csv`**: one row per problem: `severity` (HIGH / MEDIUM / LOW / INFO), `category`
+  (SOURCE_PAGE, LINK, CANONICAL, HREFLANG, IFRAME, IMAGE, IMAGE_SEO), `issue_type`, source page, element,
+  found/normalized URL, anchor or alt text, page location, status, initial status, final URL, hop count,
+  plain-language `detail`, and a specific `recommended_action`.
+* **`13_issue_summary.csv`**: per issue type: relationships, unique URLs, pages affected, fix, and an example.
+  Fixing one URL usually clears hundreds of relationship rows.
+* **`14_page_issue_summary.csv`**: per source page: HIGH/MEDIUM/LOW/INFO counts and top issue types,
+  worst pages first.
+
+Issue types (54): status problems for links/canonicals/hreflang/iframes and images (NOT_FOUND, GONE,
+SERVER_ERROR, REDIRECT_TO_BROKEN, REDIRECT_CHAIN, REDIRECTED, BROKEN_REDIRECT, REDIRECT_LOOP, TIMEOUT,
+DNS_FAILURE, CONNECTION_FAILED, SSL_ERROR, WAF_BLOCKED, RATE_LIMITED, ROBOTS_BLOCKED, UNSAFE_DESTINATION, ...);
+link hygiene (INVALID_URL, INSECURE_HTTP_LINK); images (IMAGE_CONTENT_TYPE_MISMATCH, IMAGE_NOT_AN_IMAGE,
+IMAGE_EMPTY, MISSING_ALT, MIXED_CONTENT_IMAGE, LARGE_IMAGE, INVALID_IMAGE_URL); and source pages
+(SOURCE_NOT_FOUND, SITEMAP_URL_REDIRECTS, SITEMAP_URL_NOT_CANONICAL, MULTIPLE_CANONICALS, MISSING_CANONICAL,
+SOFT_404, MISSING_TITLE, PAGE_TRUNCATED, NO_LINKS_EXTRACTED, NON_HTML_SOURCE, SLOW_RESPONSE,
+CLASSIFICATION_NEEDS_REVIEW, ...). WAF/robots outcomes are labeled as "not the origin's status": re-verify
+before acting. Checks that would bury real problems (e.g. missing width/height on every image) are
+deliberately not emitted.
+
+New trust-gate checks: issue rows = issue-summary total = page-summary total; broken-link issues = rows in
+`07_broken_urls.csv`; broken-image issues = rows in `09_broken_images.csv`.
+
+URL-status (bulk list) exports gained `severity` + `recommended_action` per URL and an issues-by-severity
+block in the Summary sheet.
+
+### Speed (re-measured, same 10K benchmark)
+
+| | Before | After |
+|---|---|---|
+| Crawl + validation | 768.9 s | 769.5 s |
+| Report package (14 CSVs + ZIP + trust gate) | 18.1 s (11 CSVs) | 18.7 s |
+| Reconciliation | 24/24 PASS | 28/28 PASS |
+
+Tests: **112 passed, 17 failed** (the same 17 pre-existing environment failures as the untouched baseline);
+crash-recovery, realtime 8/8, SSRF, large-upload scripts PASS.
