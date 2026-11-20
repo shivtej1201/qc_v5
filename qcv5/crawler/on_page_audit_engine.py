@@ -2961,6 +2961,7 @@ class OnPageAuditEngine:
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept-Encoding": "gzip, deflate",
+                **(getattr(self, "extra_headers", None) or {}),   # V6: honest UA suffix + X-QC-Audit token
             },
         ) as client:
             await self._wait_for_primary_ready(client, initial_wait=False)

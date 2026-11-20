@@ -21,3 +21,6 @@ BAJAJ_MALL_ON_PAGE_URL_AUDIT/
 
 # packaged source zips
 dist/
+
+# V6 runtime data
+v6/var/

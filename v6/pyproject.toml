@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qc6"
+version = "6.0.0a1"
+description = "QC V6: coverage crawl, real-visitor review, user journeys and fixes"
+requires-python = ">=3.11"
+dependencies = ["fastapi", "uvicorn", "asyncpg", "httpx", "playwright", "pyyaml", "duckdb", "pyarrow", "pillow"]
+
+[tool.setuptools.packages.find]
+include = ["qc6*"]
+
+[tool.setuptools.package-data]
+"qc6.db" = ["migrations/*.sql"]
+"qc6" = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", ".."]
