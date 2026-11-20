@@ -76,7 +76,7 @@ def main():
           with open(urls, "w") as f:
             f.write("\n".join(f"{base}/p/{i}" for i in range(a.sources)))
         os.chdir(ROOT)
-        import run_on_page_audit as cli
+        import qcv5.cli.run_on_page_audit as cli
         args = cli.parse_args([
             "--urls", urls, "--db", os.path.join(work, "audit.db"), "--job-id", "BENCH10K",
             "--out-dir", os.path.join(work, "out"), "--package-name", "QC_V5_10K_AUDIT",

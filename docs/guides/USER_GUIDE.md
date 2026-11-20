@@ -305,6 +305,22 @@ fixes get **VERIFIED** (§6).
 
 ---
 
+## 7a. SEO Toolkit (free integrations)
+
+**SEO Toolkit** in the sidebar (or the **SEO Toolkit** button on an audit's page, which fills in that audit's domain)
+checks one URL with eight free integrations: AI crawler access, HTTPS and security headers, structured data,
+PageSpeed and Core Web Vitals, Wayback history, IndexNow, Bing Webmaster Tools, and Google Search Console + GA4.
+
+1. Enter a URL and press **Run all ready checks**. Cards marked **key needed** are skipped until a key is configured.
+2. Each card shows HIGH / MEDIUM / LOW counts, the key facts and each finding with its fix. **Run again** re-checks
+   one card; PageSpeed (strategy), Search Console (days) and IndexNow (submit) have options next to the button.
+3. Below the cards: **Google Search updates** (confirmed updates with dates and Google sources) and **Schema.org
+   templates** (pick one, **Copy**, replace the `[placeholders]`).
+
+![SEO Toolkit results](img/11b_seo_toolkit_results.png)
+
+Keys, setup and the API are in the [integrations guide](INTEGRATIONS.md).
+
 ## 8. Reports and the ZIP package
 
 | File | Contents |

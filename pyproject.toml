@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcv5"
+version = "5.1.0"
+description = "QC V5: on-page URL, image and SEO audit platform with free SEO integrations"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas", "openpyxl", "httpx", "playwright", "pydantic", "pydantic-settings", "aiosqlite", "fastapi",
+  "uvicorn", "python-multipart", "python-dateutil", "psutil", "cryptography",
+]
+
+[project.scripts]
+qcv5 = "qcv5.__main__:main"
+qcv5-audit = "qcv5.cli.run_on_page_audit:main"
+
+[tool.setuptools.packages.find]
+include = ["qcv5*"]
+
+[tool.setuptools.package-data]
+"qcv5.integrations" = ["data/*.json", "data/*.txt", "NOTICE.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests", "bench"]

@@ -38,11 +38,17 @@ prioritized, actionable issue report. Built for
   summaries; 18 streamed files in one ZIP with a manifest (rows, size, SHA-256 verified against the ZIP).
 - **Trustworthy numbers**: a 35-check trust gate reconciles every CSV against the database; any mismatch fails the run.
 - **Resumable**: stop and resume any time; API restarts don't interrupt audits.
+- **SEO Toolkit — free integrations** (`/dashboard/#/integrations`): AI crawler access (robots.txt per AI bot,
+  Content-Signal, llms.txt), HTTPS and security headers, structured data validation + Schema.org templates,
+  PageSpeed Insights / Core Web Vitals, Wayback history, IndexNow, Bing Webmaster Tools, Google Search Console + GA4,
+  and a timeline of confirmed Google updates. Checks ported from
+  [claude-seo](https://github.com/AgriciDaniel/claude-seo) (MIT). See [the integrations guide](docs/guides/INTEGRATIONS.md).
 
 ## Quick start
 
 ```bash
 ./start.sh            # Windows: start.bat — creates a venv, installs requirements + Chromium, starts the server
+python -m qcv5        # or start it directly (http://127.0.0.1:8002); `pip install -e .` adds a `qcv5` command
 ```
 
 Open <http://127.0.0.1:8002/dashboard/> → **New audit** → **From sitemap** (enter a sitemap, robots.txt or domain →
@@ -52,13 +58,13 @@ predicted duration) → **Launch**. Saved profiles live under **Sitemaps**. The 
 Command line (same engine, same reports):
 
 ```bash
-python run_on_page_audit.py --urls sitemap_urls.txt --job-id onpage_10k --primary-domain bajajfinserv.in \
+python -m qcv5.cli.run_on_page_audit --urls sitemap_urls.txt --job-id onpage_10k --primary-domain bajajfinserv.in \
   --target-rps 12 --max-rps 12 --source-concurrency 20 --dest-concurrency 20 --image-concurrency 30 \
   --host-budget cms-assets.bajajfinserv.in=20 --out-dir reports/onpage
 ```
 
 Re-run with the same `--job-id` to resume. `--sitemap-meta` (written by the dashboard) adds sitemap provenance for
-the sitemap report; `--no-seo` skips the SEO page facts. `python run_on_page_audit.py -h` lists every option.
+the sitemap report; `--no-seo` skips the SEO page facts. `python -m qcv5.cli.run_on_page_audit -h` lists every option.
 
 ## Speed: what decides 15–20 minutes
 
@@ -104,32 +110,37 @@ pages. Measure the real ceiling from your network with `bench/live_edge_matrix.p
 - [10K performance and accuracy report](docs/performance/ON_PAGE_10K_URL_IMAGE_AUDIT.md)
 - [User guide — Command Center](docs/guides/USER_GUIDE.md): creating audits, live monitoring, explorers, issues, remediation, reports
 - [SOP — running an on-page audit](docs/guides/SOP_ON_PAGE_AUDIT.md): pre-flight rate check, procedure, validation, incidents, checklists
-- [Classic console user guide](USER_GUIDE.md)
+- [SEO Toolkit — free integrations](docs/guides/INTEGRATIONS.md): what each check does, keys, setup
+- [Classic console user guide](docs/legacy/USER_GUIDE.md)
 
 ## Project layout
 
 ```
-server.py                 FastAPI app (classic APIs + /api/on-page/* + static UIs)
-onpage_service.py         audit lifecycle, presets/estimates, insights, report access
-run_on_page_audit.py      audit worker CLI (engine + CSV/ZIP package)
-on_page_audit_engine.py   crawl + validation pipeline, rate control, checkpoints
-on_page_issue_rules.py    issue types, severity, recommended actions
-on_page_csv_packager.py   streaming reports + trust gate (incl. cross-page SEO + sitemap reports)
-seo_audit.py              SEO / technical-SEO page facts and rules
-sitemap_config.py         sitemap discovery, selection, saved profiles (builds on sitemap_extractor.py)
-html_parser.py · url_normalizer.py · request_errors.py · on_page_schema.py
-job_manager.py · daemon.py · checker.py · db.py      classic bulk URL-status pipeline
-frontend/dashboard/       Command Center (ES modules, design tokens, vendored Three.js)
-frontend/index.html       classic console
-bench/                    simulated edge, benchmarks, live-edge RPS matrix
-docs/                     architecture, design, performance, reports
-test_*.py                 test suites
+qcv5/                      application package
+  api/server.py            FastAPI app: REST API (/api/on-page/*, /api/integrations/*, classic /api/*) + static UIs
+  services/                onpage_service (audit lifecycle, presets, insights, reports), job_manager, daemon
+  crawler/                 on_page_audit_engine (crawl + validation pipeline, rate control, checkpoints), http_pool,
+                           html_parser, url_normalizer (SSRF guard), sitemap_extractor, sitemap_config, classifiers
+  audit/                   issue_store (issues, lifecycle, score), on_page_issue_rules, seo_audit, on_page_schema,
+                           remediation_engine
+  reports/                 on_page_csv_packager (18 streamed files + trust gate), Excel report generators
+  integrations/            free SEO integrations (see docs/guides/INTEGRATIONS.md) + NOTICE.md (claude-seo, MIT)
+  core/                    config (settings), db, models, request_errors, ai_provider
+  cli/run_on_page_audit.py audit worker CLI (engine + CSV/ZIP package)
+  __main__.py              `python -m qcv5` starts the web app
+frontend/dashboard/        Command Center (ES modules, GSAP motion, Three.js, design tokens)
+frontend/index.html        classic console
+tests/                     test suites (pytest; config in pyproject.toml)
+bench/                     simulated edge, benchmarks, live-edge RPS matrix, results
+scripts/                   benchmarks, screenshot capture, diagnostics, scratch probes, legacy tools
+docs/                      architecture, API contract, guides, design, performance, audit reports, legacy docs
+run.py · start.sh · start.bat · pyproject.toml · requirements.txt
 ```
 
 ## Testing
 
 ```bash
-python -m pytest -q --ignore=test_container.py --ignore=test_ex.py --ignore=test_html.py --ignore=test_js.py
+python -m pytest -q          # runs tests/ (see pyproject.toml)
 ```
 
 Key suites: `test_platform_pipeline.py` (deterministic fixture site: every HTTP class, redirects, all URL types,

@@ -42,7 +42,7 @@ def wait_port(host, port, t=20):
 def build_prefill(path, job, n_rels, n_live_sources, code_dir):
     """Prefilled DB: n_rels relationship rows from ~n_rels/35 completed '/old/' source pages."""
     sys.path.insert(0, code_dir)
-    from on_page_audit_engine import OnPageAuditEngine  # noqa
+    from qcv5.crawler.on_page_audit_engine import OnPageAuditEngine  # noqa
     n_old = max(1, n_rels // 35)
     e = OnPageAuditEngine(db_path=path, job_id=job, primary_domain="")
     base = "http://127.0.0.1:PORT"
@@ -130,7 +130,7 @@ def main():
         wait_port("127.0.0.2", a.port)
         os.chdir(code_dir)
         sys.path.insert(0, code_dir)
-        from on_page_audit_engine import OnPageAuditEngine  # noqa
+        from qcv5.crawler.on_page_audit_engine import OnPageAuditEngine  # noqa
 
         base = f"http://127.0.0.1:{a.port}"
         if a.prefill_rels:

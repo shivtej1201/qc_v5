@@ -24,8 +24,8 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from on_page_audit_engine import OnPageAuditEngine  # noqa: E402
-from url_normalizer import URLNormalizer  # noqa: E402
+from qcv5.crawler.on_page_audit_engine import OnPageAuditEngine  # noqa: E402
+from qcv5.crawler.url_normalizer import URLNormalizer  # noqa: E402
 
 
 def main():

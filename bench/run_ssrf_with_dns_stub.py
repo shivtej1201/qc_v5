@@ -11,4 +11,4 @@ def _gai(host, *a, **k):
 socket.getaddrinfo = _gai
 code_dir = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else ".")
 os.chdir(code_dir); sys.path.insert(0, code_dir)
-runpy.run_path(os.path.join(code_dir, "test_ssrf_adversarial.py"), run_name="__main__")
+runpy.run_path(os.path.join(code_dir, "tests", "test_ssrf_adversarial.py"), run_name="__main__")

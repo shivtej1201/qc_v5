@@ -52,6 +52,10 @@ export const api = {
   generateRemediations: (id) => req("POST", `/api/jobs/${enc(id)}/remediations/generate`),
   setRemediationStatus: (id, rid, status) => req("PATCH", `/api/jobs/${enc(id)}/remediations/${enc(rid)}`, { status }),
   fileText: (id, name) => req("GET", `/api/on-page/audits/${enc(id)}/files/${enc(name)}`),
+  integrations: () => req("GET", "/api/integrations"),
+  runIntegration: (iid, url, params = {}) => req("POST", `/api/integrations/${enc(iid)}/run`, { url, params }),
+  googleUpdates: (q = {}) => req("GET", `/api/integrations/google-updates?${new URLSearchParams(q)}`),
+  schemaTemplates: () => req("GET", "/api/integrations/schema-templates"),
   packageUrl: (id) => `/api/on-page/audits/${enc(id)}/package`,
   fileUrl: (id, name) => `/api/on-page/audits/${enc(id)}/files/${enc(name)}`,
 };

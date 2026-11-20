@@ -5,6 +5,7 @@ import { gauge, severityDonut, barList, areaChart } from "./charts.js";
 import { createCrawlCore } from "./scene3d.js";
 import { beginView, CounterAnimation, ProgressAnimation, StatusTransition, IssuePulse, ModalTransition } from "./motion.js";
 import { urlsView, urlDetailView, linksView, imagesView, issuesView, remediationView, reportsView } from "./explorers.js";
+import { integrationsView } from "./integrations.js";
 
 const ACTIVE = new Set(["RUNNING", "STOPPING"]);
 const CSV_FILES = ["01_summary.csv", "12_issues.csv", "13_issue_summary.csv", "14_page_issue_summary.csv",
@@ -46,6 +47,7 @@ function nav(active) {
     link("#/", "overview", "Command Center", "overview"),
     link("#/audits", "audits", "Audits", "audits"),
     link("#/sitemaps", "sitemap", "Sitemaps", "sitemaps"),
+    link("#/integrations", "plug", "SEO Toolkit", "integrations"),
     link("/", "classic", "Classic console", "classic"));
 }
 
@@ -365,6 +367,8 @@ async function viewAudit(token, id) {
   const actions = [
     h("a", { class: "btn btn-ghost", href: "#/audits" }, icon("back"), "Audits"),
     ...lifecycleActions(d, id),
+    h("a", { class: "btn", href: `#/integrations?url=${encodeURIComponent(`https://${d.primary_domain}/`)}`,
+      title: "Run the free SEO integrations for this domain" }, icon("plug"), "SEO Toolkit"),
     d.package_available ? h("a", { class: "btn btn-primary", href: api.packageUrl(id) }, icon("download"), "Download ZIP") : null,
   ];
   // Each stage is progress against ITS OWN population (one shared scale would make 100% of
@@ -809,6 +813,15 @@ async function viewSitemaps(token) {
   mount(app, shell("sitemaps", "Sitemaps", `${profiles.length} saved profile(s)`, actions, content));
 }
 
+// ------------------------------------------------------------------ SEO toolkit (free integrations; no polling)
+function viewIntegrations(token, query) {
+  disposeScene();
+  if (token !== viewToken) return;
+  mount(app, shell("integrations", "SEO Toolkit",
+    "Free integrations: AI crawler access, security headers, structured data, PageSpeed, Wayback, IndexNow, Bing, Search Console",
+    [], integrationsView(query)));
+}
+
 // ------------------------------------------------------------------ audit explorer tabs (no polling: interactive)
 async function viewAuditTab(token, id, tab, query) {
   const d = await api.audit(id);
@@ -848,6 +861,7 @@ async function render() {
     else if (m) await viewAudit(token, m[1]);
     else if (hash.startsWith("#/audits")) await viewAudits(token);
     else if (hash.startsWith("#/sitemaps")) await viewSitemaps(token);
+    else if (hash.startsWith("#/integrations")) viewIntegrations(token, new URLSearchParams(hash.split("?")[1] || ""));
     else await viewOverview(token);
   } catch (e) {
     if (token !== viewToken) return;

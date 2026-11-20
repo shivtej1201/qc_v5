@@ -9,7 +9,7 @@ QC V5 audits websites at scale:
 
 | Capability | Entry point | Output |
 |---|---|---|
-| **On-page URL + image + SEO audit** (sitemap pages → every link, canonical, hreflang, iframe and image on them; SEO / technical-SEO facts per page; sitemap health) | Command Center (`/dashboard/`), `run_on_page_audit.py`, `/api/on-page/*` | 16 CSVs + ZIP, issue reports, live metrics |
+| **On-page URL + image + SEO audit** (sitemap pages → every link, canonical, hreflang, iframe and image on them; SEO / technical-SEO facts per page; sitemap health) | Command Center (`/dashboard/`), `qcv5/cli/run_on_page_audit.py`, `/api/on-page/*` | 16 CSVs + ZIP, issue reports, live metrics |
 | **Bulk URL status check** (up to 125K+ URLs from a sheet) | Classic console (`/`), `/api/upload` | one result row per submitted URL |
 | Link / image / API-response audits (Playwright-based) | Classic console | Excel reports |
 
@@ -26,11 +26,11 @@ on a simulated Akamai edge (see §7 for what governs this on the real site).
            └──────┬───────┘                 └────────────────────────────┘  │
                   │ JSON / CSV / ZIP                                         │ ONE shared
            ┌──────▼──────────────────────────────┐   spawn / stop-file      │ request budget
-           │ FastAPI app (server.py)             │────────────────┐         │ per primary domain
+           │ FastAPI app (qcv5/api/server.py)             │────────────────┐         │ per primary domain
            │  · classic job APIs + batch daemon  │                ▼         │
            │  · /api/on-page/* (onpage_service)  │   ┌─────────────────────┴──┐   ┌──────────────┐
            └──────┬──────────────────────────────┘   │ Audit worker process   │──▶│ CDN / external│
-                  │ aiosqlite (WAL)                  │ run_on_page_audit.py    │   │ hosts (own    │
+                  │ aiosqlite (WAL)                  │ qcv5.cli.run_on_page_… │   │ hosts (own    │
            ┌──────▼────────────────────────────────┐ │ OnPageAuditEngine       │   │ budgets)      │
            │ SQLite (WAL) audit_cache.db           │◀┤ (sqlite3, single writer)│   └──────────────┘
            └───────────────────────────────────────┘ └─────────┬──────────────┘
@@ -50,21 +50,21 @@ Design decisions:
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | FastAPI app: classic APIs, `/api/on-page/*` dashboard API, static UIs (`/` classic, `/dashboard/` new) |
-| `onpage_service.py` | Audit lifecycle (start/stop/resume), presets, duration model, issue browsing, smart insights, health score |
-| `run_on_page_audit.py` | Worker CLI: inventory → engine → CSV/ZIP package; graceful stop (SIGTERM or stop-file); result JSON |
-| `on_page_audit_engine.py` | Crawl + validation pipeline, rate control, WAF handling, registries, exact counters, checkpointing |
-| `html_parser.py` | Single-pass HTML parser: links, canonical, hreflang, meta, area, iframe, images (srcset, picture, lazy, og/twitter) |
-| `on_page_issue_rules.py` | ~100 issue types → severity, detail, recommended action (pure functions) |
-| `seo_audit.py` | SEO page facts from the single parse (+ `X-Robots-Tag`), single-page SEO rules, hreflang reciprocity, lastmod rules |
-| `sitemap_config.py` | Sitemap discovery (sitemap / robots.txt / domain), import snapshots, selection filters, saved profiles; uses `sitemap_extractor.py` (SSRF per hop, robots, gzip, nested indexes) |
-| `on_page_csv_packager.py` | Streaming reports 00–17 (incl. cross-page SEO checks, per-sitemap health, input exceptions, manifest), ZIP with SHA-256 verification, trust gate |
-| `issue_store.py` | Persisted issues (unique per page + rule + subject), project-level issue lifecycle, deterministic health score |
-| `remediation_engine.py` | Remediation items from classic audits **and** on-page issues (grouped per destination / page / site-wide) |
-| `on_page_schema.py` | Dependency-free image-audit DDL shared by API and worker |
-| `request_errors.py` | Type-based transport error classification shared by checker + engine |
-| `url_normalizer.py` | Normalization (cache key), syntax validation, SSRF checks (DNS/private-IP aware) |
-| `job_manager.py`, `daemon.py`, `checker.py`, `db.py` | Classic bulk URL-status pipeline (per-URL ledger, resumable batches) |
+| `qcv5/api/server.py` | FastAPI app: classic APIs, `/api/on-page/*` dashboard API, static UIs (`/` classic, `/dashboard/` new) |
+| `qcv5/services/onpage_service.py` | Audit lifecycle (start/stop/resume), presets, duration model, issue browsing, smart insights, health score |
+| `qcv5/cli/run_on_page_audit.py` | Worker CLI: inventory → engine → CSV/ZIP package; graceful stop (SIGTERM or stop-file); result JSON |
+| `qcv5/crawler/on_page_audit_engine.py` | Crawl + validation pipeline, rate control, WAF handling, registries, exact counters, checkpointing |
+| `qcv5/crawler/html_parser.py` | Single-pass HTML parser: links, canonical, hreflang, meta, area, iframe, images (srcset, picture, lazy, og/twitter) |
+| `qcv5/audit/on_page_issue_rules.py` | ~100 issue types → severity, detail, recommended action (pure functions) |
+| `qcv5/audit/seo_audit.py` | SEO page facts from the single parse (+ `X-Robots-Tag`), single-page SEO rules, hreflang reciprocity, lastmod rules |
+| `qcv5/crawler/sitemap_config.py` | Sitemap discovery (sitemap / robots.txt / domain), import snapshots, selection filters, saved profiles; uses `qcv5/crawler/sitemap_extractor.py` (SSRF per hop, robots, gzip, nested indexes) |
+| `qcv5/reports/on_page_csv_packager.py` | Streaming reports 00–17 (incl. cross-page SEO checks, per-sitemap health, input exceptions, manifest), ZIP with SHA-256 verification, trust gate |
+| `qcv5/audit/issue_store.py` | Persisted issues (unique per page + rule + subject), project-level issue lifecycle, deterministic health score |
+| `qcv5/audit/remediation_engine.py` | Remediation items from classic audits **and** on-page issues (grouped per destination / page / site-wide) |
+| `qcv5/audit/on_page_schema.py` | Dependency-free image-audit DDL shared by API and worker |
+| `qcv5/core/request_errors.py` | Type-based transport error classification shared by checker + engine |
+| `qcv5/crawler/url_normalizer.py` | Normalization (cache key), syntax validation, SSRF checks (DNS/private-IP aware) |
+| `qcv5/services/job_manager.py`, `qcv5/services/daemon.py`, `qcv5/crawler/checker.py`, `qcv5/core/db.py` | Classic bulk URL-status pipeline (per-URL ledger, resumable batches) |
 | `frontend/dashboard/` | Command Center SPA (vanilla ES modules + vendored Three.js) |
 
 ## 4. The on-page audit pipeline (inside one worker)
@@ -153,7 +153,7 @@ CREATED -> QUEUED -> RUNNING -> PAUSING -> PAUSED -> (resume) RESUMED/RUNNING ->
 The state is derived from the worker process, its `result.json` and the audit metadata, and every transition is
 appended to an event history (`events` in `GET audits/{id}`). Pause and cancel are graceful: in-flight requests finish
 and are committed. Recovery: completed pages and validations are never re-requested; PENDING pages and validations
-continue on resume (verified with a SIGKILL in `test_platform_pipeline.py`).
+continue on resume (verified with a SIGKILL in `tests/test_platform_pipeline.py`).
 
 ## 6c. Issues, lifecycle and score
 
@@ -219,8 +219,8 @@ on job ids and report file names (no path traversal); crawled text is rendered a
 
 ## 9. Operations
 
-* Run: `./start.sh` (or `uvicorn server:app`), open `/dashboard/`. Workers are spawned on demand.
+* Run: `./start.sh` (or `python -m qcv5`), open `/dashboard/`. Workers are spawned on demand.
 * Config: `DB_FILE`, `QC_ONPAGE_DATA_DIR`, `QC_ONPAGE_REPORTS_DIR`, `ALLOW_LOCAL_TESTING` (tests only), plus every
-  `run_on_page_audit.py` flag (rates, concurrency, host budgets, byte limits).
+  `qcv5/cli/run_on_page_audit.py` flag (rates, concurrency, host budgets, byte limits).
 * Recovery: API restart is safe (workers continue); worker crash → `INTERRUPTED` → Resume.
 * Tests: `python -m pytest` (see README for the suite map and expected environment-dependent skips/failures).

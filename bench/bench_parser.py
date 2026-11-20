@@ -4,7 +4,7 @@ import asyncio, os, sys, time, statistics, concurrent.futures as cf
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sim_site import page_html
-from on_page_audit_engine import extract_on_page_urls
+from qcv5.crawler.on_page_audit_engine import extract_on_page_urls
 
 BASE = "http://www.qcbench.test"
 PAGES = [page_html(i, 20000, BASE, "http://ext.example.org") for i in range(200)]

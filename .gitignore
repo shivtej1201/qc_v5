@@ -18,3 +18,6 @@ scratch/
 data/
 *.zip
 BAJAJ_MALL_ON_PAGE_URL_AUDIT/
+
+# packaged source zips
+dist/

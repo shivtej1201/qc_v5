@@ -4,7 +4,7 @@
 3) write cost of each relationship secondary index"""
 import os, sys, time, json, random, sqlite3, tempfile, statistics
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from on_page_audit_engine import OnPageAuditEngine
+from qcv5.crawler.on_page_audit_engine import OnPageAuditEngine
 
 RELS_PER_PAGE = 35
 def rel_rows(job, src_i, n_sources):

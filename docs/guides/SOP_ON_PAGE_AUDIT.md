@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Document | Standard Operating Procedure, on-page URL / link / image / SEO audit |
-| Applies to | QC V5 Command Center (`/dashboard/`) and the `run_on_page_audit.py` command line |
+| Applies to | QC V5 Command Center (`/dashboard/`) and the `qcv5/cli/run_on_page_audit.py` command line |
 | Audience | SEO analysts who run audits, the operator who owns the server, developers who fix the issues |
 | Related | [User guide](USER_GUIDE.md) · [Architecture](../architecture/ARCHITECTURE.md) · [API contract](../api/API_CONTRACT.md) · [Final validation report](../audit/FINAL_VALIDATION_REPORT.md) |
 
@@ -84,7 +84,7 @@ cd qc_v5
 On Windows run `start.bat`. The script creates a virtual environment, installs `requirements.txt` and Chromium, and
 starts the server on <http://127.0.0.1:8002>. Later starts: activate the venv and run `python run.py`.
 
-Configuration is read from environment variables / `.env` (see `config.py`). Never set `ALLOW_LOCAL_TESTING=true`
+Configuration is read from environment variables / `.env` (see `qcv5/core/config.py`). Never set `ALLOW_LOCAL_TESTING=true`
 on a production server — it disables the private-address (SSRF) protection and exists only for tests and demos.
 
 ## 6. Pre-flight: find the safe request rate (once per site, then quarterly)
@@ -251,14 +251,14 @@ purpose (formula-injection protection).
 ## 12. Command-line procedure (scheduled / very large runs)
 
 ```bash
-python run_on_page_audit.py --urls sitemap_urls.txt --job-id loans_2026w47 --primary-domain bajajfinserv.in --target-rps 12 --max-rps 12 --source-concurrency 20 --dest-concurrency 20 --image-concurrency 30 --out-dir reports/onpage
+python -m qcv5.cli.run_on_page_audit --urls sitemap_urls.txt --job-id loans_2026w47 --primary-domain bajajfinserv.in --target-rps 12 --max-rps 12 --source-concurrency 20 --dest-concurrency 20 --image-concurrency 30 --out-dir reports/onpage
 ```
 
 * Re-run the same command (same `--job-id`) to **resume** after any interruption.
 * Graceful stop: `--stop-file stop.flag`, then create `stop.flag`.
 * Images on their own CDN with a separate budget: `--host-budget cms-assets.bajajfinserv.in=20`.
 * `--events-log events.jsonl` keeps a per-stage event log for incident analysis.
-* `python run_on_page_audit.py -h` lists every option.
+* `python -m qcv5.cli.run_on_page_audit -h` lists every option.
 
 ## 13. Records to keep per run (run sheet)
 
@@ -280,8 +280,7 @@ python run_on_page_audit.py --urls sitemap_urls.txt --job-id loans_2026w47 --pri
 * Keep the last 4 runs per profile online (issue lifecycle compares against earlier runs of the same domain); archive
   older ZIPs and delete their report folders.
 * Back up the SQLite database (`audit_cache.db`) before upgrades; stop running audits first.
-* After each upgrade, run the test suite (`python -m pytest -q --ignore=test_container.py --ignore=test_ex.py
-  --ignore=test_html.py --ignore=test_js.py`) and a 500-page trial audit.
+* After each upgrade, run the test suite (`python -m pytest -q`) and a 500-page trial audit.
 
 ## 15. Checklists
 
