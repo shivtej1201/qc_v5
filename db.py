@@ -1472,17 +1472,23 @@ class Database:
         }
 
     async def upsert_remediations(self, remediations: List[Dict[str, Any]]) -> int:
+        """Batched upsert (one executemany + one commit) keyed by (job_id, category, target_url)."""
         if not remediations:
             return 0
         now = datetime.utcnow().isoformat() + "Z"
-        count = 0
+        rows = []
         for rem in remediations:
-            created_at = rem.get("created_at") or now
-            updated_at = now
             source_urls_val = json.dumps(rem.get("source_urls", [])) if isinstance(rem.get("source_urls"), (list, dict)) else (rem.get("source_urls") or "[]")
             technical_details_val = json.dumps(rem.get("technical_details", {})) if isinstance(rem.get("technical_details"), (list, dict)) else (rem.get("technical_details") or "{}")
-            
-            await self.conn.execute("""
+            rows.append((
+                rem["job_id"], rem["remediation_id"], rem["category"], rem["severity"], rem["priority"],
+                rem["priority_score"], rem["confidence"], rem.get("status", "OPEN"), rem.get("review_notes"),
+                rem["target_url"], source_urls_val, rem.get("source_count", 1), rem["title"], rem["description"],
+                rem["impact"], rem["recommended_action"], rem["priority_rationale"], technical_details_val,
+                rem.get("created_at") or now, now,
+            ))
+        for i in range(0, len(rows), 2000):
+            await self.conn.executemany("""
                 INSERT INTO remediations (
                     job_id, remediation_id, category, severity, priority, priority_score,
                     confidence, status, review_notes, target_url, source_urls, source_count,
@@ -1503,31 +1509,9 @@ class Database:
                     source_urls = excluded.source_urls,
                     source_count = excluded.source_count,
                     updated_at = excluded.updated_at
-            """, (
-                rem["job_id"],
-                rem["remediation_id"],
-                rem["category"],
-                rem["severity"],
-                rem["priority"],
-                rem["priority_score"],
-                rem["confidence"],
-                rem.get("status", "OPEN"),
-                rem.get("review_notes"),
-                rem["target_url"],
-                source_urls_val,
-                rem.get("source_count", 1),
-                rem["title"],
-                rem["description"],
-                rem["impact"],
-                rem["recommended_action"],
-                rem["priority_rationale"],
-                technical_details_val,
-                created_at,
-                updated_at
-            ))
-            count += 1
+            """, rows[i:i + 2000])
         await self.conn.commit()
-        return count
+        return len(rows)
 
     async def get_remediations_paginated(
         self,

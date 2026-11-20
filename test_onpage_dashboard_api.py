@@ -121,7 +121,7 @@ def test_full_audit_via_api_guard_reports_insights(env):
             z = await c.get(f"/api/on-page/audits/{jid}/package")
             assert z.status_code == 200
             with zipfile.ZipFile(io.BytesIO(z.content)) as zf:
-                assert len(zf.namelist()) == 14 and "12_issues.csv" in zf.namelist()
+                assert len(zf.namelist()) == 18 and {"00_manifest.csv", "15_seo_page_audit.csv"} <= set(zf.namelist())
             f13 = await c.get(f"/api/on-page/audits/{jid}/files/13_issue_summary.csv")
             assert f13.status_code == 200 and f13.text.startswith("severity,category,issue_type")
             assert (await c.get(f"/api/on-page/audits/{jid}/files/..%2F..%2Fconfig.json")).status_code in (400, 404)

@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import random
 import re
 import sqlite3
 import time
@@ -19,6 +20,8 @@ from classifier import Classifier
 from config import settings
 from diagnostics_403 import Diagnostics403
 from html_parser import Parser
+from http_pool import PerHostPoolTransport
+from seo_audit import SEO_COLUMNS, page_facts as seo_page_facts
 from status_classifier import StatusClassifier
 from url_normalizer import URLNormalizer
 
@@ -36,7 +39,42 @@ TYPE_PRIORITY = {
     "AREA": 4,
     "IFRAME": 5,
     "LINK_META": 6,
+    "META_REFRESH": 7,
+    "SCRIPT": 8,
+    "STYLESHEET": 9,
+    "LINK_RESOURCE": 10,
+    "CSS_RESOURCE": 11,
+    "MEDIA": 12,
+    "EMBED": 13,
+    "SOCIAL_URL": 14,
+    "JSONLD_URL": 15,
+    "FORM": 16,
 }
+# URL categories that are recorded but never requested: a GET on a form endpoint is not a valid check
+# (it may have side effects or answer 405 for a working POST target).
+NOT_REQUESTED_TYPES = frozenset({"FORM"})
+# URL category groups used by reports and the link/resource split
+NAVIGATION_TYPES = frozenset({"ANCHOR", "AREA", "IFRAME", "META_REFRESH", "EMBED"})
+SEO_SIGNAL_TYPES = frozenset({"CANONICAL", "HREFLANG", "LINK_META", "SOCIAL_URL", "JSONLD_URL"})
+RESOURCE_TYPES = frozenset({"SCRIPT", "STYLESHEET", "LINK_RESOURCE", "CSS_RESOURCE", "MEDIA"})
+
+
+RETRY_BASE_SEC = 0.5
+RETRY_CAP_SEC = 8.0
+RETRY_AFTER_CAP_SEC = 30.0
+
+
+def retry_delay(attempt: int, retry_after: Optional[str] = None, rng: random.Random = random) -> float:
+    """Bounded exponential backoff with jitter for TRANSIENT failures (timeouts, connection errors, 429, 502-504).
+    attempt=1 -> ~0.5 s, 2 -> ~1 s, 3 -> ~2 s … capped at 8 s, +0-25% jitter so workers don't retry in lockstep.
+    A numeric Retry-After (seconds) is honored up to 30 s. 4xx (except 429), robots and SSRF are never retried."""
+    delay = min(RETRY_CAP_SEC, RETRY_BASE_SEC * (2 ** max(0, attempt - 1)))
+    if retry_after:
+        try:
+            delay = max(delay, min(RETRY_AFTER_CAP_SEC, float(str(retry_after).strip())))
+        except ValueError:
+            pass   # HTTP-date form: fall back to backoff
+    return delay + rng.uniform(0, delay * 0.25)
 
 
 def utc_now_iso() -> str:
@@ -227,7 +265,11 @@ def extract_on_page_urls(
             if not rec["hreflang"] and hreflang:
                 rec["hreflang"] = hreflang
 
-    return raw_count, list(grouped.values()), parser
+    out = list(grouped.values())
+    for rec in out:
+        # requested unless EVERY occurrence on this page is a not-requested type (e.g. only a form action)
+        rec["not_requested"] = bool(rec["is_http"] and set(rec["link_types"]) <= NOT_REQUESTED_TYPES)
+    return raw_count, out, parser
 
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".bmp", ".ico", ".tif", ".tiff", ".jfif")
@@ -626,6 +668,7 @@ class OnPageAuditEngine:
         discard_body_limit: int = 256 * 1024,
         primary_hosts: Optional[List[str]] = None,
         audit_images: bool = True,
+        audit_seo: bool = True,
         image_concurrency: int = 10,
         image_discard_body_limit: int = 64 * 1024,
         max_connections: Optional[int] = None,
@@ -665,6 +708,7 @@ class OnPageAuditEngine:
         self.discard_body_limit = discard_body_limit
         self.primary_hosts = {h.lower().strip() for h in (primary_hosts or []) if h and h.strip()}
         self.audit_images = audit_images
+        self.audit_seo = audit_seo
         self.image_concurrency = max(1, int(image_concurrency))
         self.image_discard_body_limit = image_discard_body_limit
         self.max_connections = max_connections
@@ -918,7 +962,8 @@ class OnPageAuditEngine:
                 extracted_at TIMESTAMP,
                 UNIQUE (job_id, source_page_url, normalized_found_url)
             );
-            CREATE INDEX IF NOT EXISTS idx_oplr_job ON on_page_link_relationships(job_id);
+            -- idx_oplr_job(job_id) dropped: the UNIQUE (job_id, source_page_url, normalized_found_url) index serves it
+            DROP INDEX IF EXISTS idx_oplr_job;
             CREATE INDEX IF NOT EXISTS idx_oplr_dest ON on_page_link_relationships(job_id, normalized_found_url);
             CREATE INDEX IF NOT EXISTS idx_oplr_scope ON on_page_link_relationships(job_id, found_url_scope);
             CREATE INDEX IF NOT EXISTS idx_oplr_valsrc ON on_page_link_relationships(job_id, validation_source);
@@ -1055,6 +1100,17 @@ class OnPageAuditEngine:
             host == self.primary_domain or host.endswith("." + self.primary_domain)
         )
 
+    def _is_heavy_host(self, host: str) -> bool:
+        """Hosts the crawler sends sustained traffic to (primary hosts, hosts with their own rate budget)."""
+        host = (host or "").lower().strip("[]")
+        if not host:
+            return False
+        if host in self.primary_hosts or (self.primary_domain and (
+                host == self.primary_domain or host.endswith("." + self.primary_domain))):
+            return True
+        return any(host == k or (k.startswith(".") and (host == k[1:] or host.endswith(k)))
+                   for k in self.host_budgets)
+
     def _budget_for(self, url: str) -> Optional["HostRateBudget"]:
         if not self.host_budgets or self._is_primary_host(url):
             return None
@@ -1101,7 +1157,15 @@ class OnPageAuditEngine:
             if wait_s > 0:
                 await asyncio.sleep(wait_s)
             if self._cooldown_gate.is_set() and epoch == self._cooldown_epoch:
-                self.metrics["primary_requests"] += 1
+                m = self.metrics
+                m["primary_requests"] += 1
+                sec = int(time.monotonic())            # measured peak: requests released in one wall-clock second
+                if sec == m.get("_peak_sec"):
+                    m["_peak_cnt"] += 1
+                else:
+                    m["_peak_sec"], m["_peak_cnt"] = sec, 1
+                if m["_peak_cnt"] > m.get("peak_primary_rps_1s", 0):
+                    m["peak_primary_rps_1s"] = m["_peak_cnt"]
                 return
 
     async def _pace_if_primary(self, url: str):
@@ -1385,13 +1449,10 @@ class OnPageAuditEngine:
 
                 if not ssrf_safe or error_type in ("Redirect Loop", "Redirect Without Location", "Invalid Redirect Target"):
                     break   # deterministic: a retry cannot change the outcome
-                if final_status in (502, 503, 504) and retries < self.max_retries:
+                if final_status in (429, 502, 503, 504) and retries < self.max_retries:
                     retries += 1
-                    await asyncio.sleep(1.0 * retries)
-                    continue
-                if final_status == 429 and retries < self.max_retries:
-                    retries += 1
-                    await asyncio.sleep(2.0 * retries)
+                    m["retries"] = m.get("retries", 0) + 1
+                    await asyncio.sleep(retry_delay(retries, resp_headers.get("retry-after")))
                     continue
                 break
 
@@ -1411,7 +1472,8 @@ class OnPageAuditEngine:
                 final_status = None
                 retries += 1
                 if retries <= self.max_retries:
-                    await asyncio.sleep(1.0 * retries)
+                    m["retries"] = m.get("retries", 0) + 1
+                    await asyncio.sleep(retry_delay(retries))
 
         elapsed_ms = round(net_ms, 2)
         html_text = ""
@@ -1487,6 +1549,7 @@ class OnPageAuditEngine:
             "html_bytes": html_bytes,
             "html_truncated": html_truncated,
             "content_length": int(resp_headers.get("content-length")) if str(resp_headers.get("content-length", "")).isdigit() else None,
+            "x_robots_tag": str(resp_headers.get("x-robots-tag", "") or "")[:300],
         }
 
     def _exec_with_retry(self, fn):
@@ -1596,6 +1659,13 @@ class OnPageAuditEngine:
                 """,
                 source_updates,
             )
+            seo_rows = [su["_seo"] for su in source_updates if su.get("_seo")]
+            if seo_rows:
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO on_page_seo_pages ({', '.join(SEO_COLUMNS)}) "
+                    f"VALUES ({', '.join(':' + c for c in SEO_COLUMNS)})",
+                    seo_rows,
+                )
             # Mirror classifications into QC V5 source_classifications
             self.conn.executemany(
                 """
@@ -2074,10 +2144,21 @@ class OnPageAuditEngine:
         src_done = self._run_sources_done
         src_left = (self._mirror.get("src") or Counter()).get("PENDING", 0) if self._mirror else 0
         pps = src_done / el
+        # recent (current) rate over a ~60 s window of samples taken at each progress write
+        now = time.monotonic()
+        win = self.__dict__.setdefault("_rate_window", [])
+        win.append((now, src_done))
+        while len(win) > 2 and now - win[0][0] > 60.0:
+            win.pop(0)
+        recent = (src_done - win[0][1]) / (now - win[0][0]) if len(win) > 1 and now > win[0][0] else pps
+        eta_rate = recent if recent > 0 else pps
         k = m["requests_by_kind"]
         return {
             "elapsed_sec": round(el, 1),
             "source_pages_per_sec": round(pps, 2),
+            "source_pages_per_sec_recent": round(recent, 2),
+            "eta_recent_sec": round(src_left / eta_rate, 0) if eta_rate > 0 else None,
+            "retries": m.get("retries", 0),
             "url_validations_per_sec": round(m["dest_validations"] / el, 2),
             "image_validations_per_sec": round(m["image_validations"] / el, 2),
             "total_requests_per_sec": round(m["http_requests"] / el, 2),
@@ -2603,13 +2684,21 @@ class OnPageAuditEngine:
         Queued-but-unstarted destinations stay PENDING in the DB and are rescheduled on resume."""
         self._stop_requested = True
 
+claude/crawlpulse-backend-hardening
+    def _parse_and_classify(self, src_url: str, final_url: str, html: str, seo_ctx: Optional[Tuple[str, str]] = None):
+        """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title, images and
+        the SEO signals. seo_ctx=(x_robots_tag, checked_at) requests the SEO row (2xx HTML pages only)."""
     def _parse_and_classify(self, src_url: str, final_url: str, html: str):
         """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title, SEO signals."""
+main
         raw_occ, rels, parser = extract_on_page_urls(src_url, final_url, html)
         raw_img, img_rels = 0, []
         if self.audit_images:
             source_host = (urllib.parse.urlsplit(final_url or src_url).hostname or "").lower()
             raw_img, img_rels = extract_on_page_images(parser, source_host)   # same Parser instance
+        seo = None
+        if seo_ctx is not None:
+            seo = seo_page_facts(self.job_id, src_url, final_url, parser, rels, seo_ctx[0], seo_ctx[1])
         t1, t2, _ = self.classifier.extract_meta_tags(html[:32768], parser=None)
         title = " ".join((parser.title or "").split())[:300]
         seo_meta = {
@@ -2627,10 +2716,14 @@ class OnPageAuditEngine:
             "twitter_card": parser.twitter_card or "",
         }
         if t1 and t2:
+            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title, seo
+        clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
+        return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
+                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title, seo)
             return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title, seo_meta
         clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
         return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
-                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title, seo_meta)
+                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title, seo_meta)main
 
     def performance_summary(self) -> Dict[str, Any]:
         m = self.metrics
@@ -2652,6 +2745,7 @@ class OnPageAuditEngine:
             "primary_requests_paced": m["primary_requests"],
             "robots_fetches": self.robots.fetch_count,
             "achieved_primary_rps": round(m["primary_requests"] / elapsed, 2),
+            "peak_primary_rps_1s": m.get("peak_primary_rps_1s", 0),
             "target_rps_final": self.target_rps,
             "akamai_cooldowns": self.cooldown_count,
             "waf_events": m["waf_events"],
@@ -2899,12 +2993,17 @@ class OnPageAuditEngine:
         loop = asyncio.get_running_loop()
         parse_pool = concurrent.futures.ThreadPoolExecutor(self.parse_workers, thread_name_prefix="onpage-parse")
 
+        # one connection pool per host (see http_pool.py): httpcore re-scans every pooled connection on each
+        # request, so a single pool shared by the primary site, CDN and external hosts costs O(all connections)
+        transport = PerHostPoolTransport(
+            limits=limits, other_host_keepalive=self.per_host_concurrency,
+            is_heavy_host=self._is_heavy_host,
+            verify=False, http2=self.http2,
+        )
         async with httpx.AsyncClient(
-            verify=False,
+            transport=transport,
             timeout=timeout,
-            limits=limits,
             follow_redirects=False,
-            http2=self.http2,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept-Encoding": "gzip, deflate",
@@ -3030,11 +3129,24 @@ class OnPageAuditEngine:
                         extracted_rels: List[Dict[str, Any]] = []
                         raw_img, extracted_imgs = 0, []
                         page_title = ""
+                        seo_row = None
+
                         seo_meta = {}
+main
                         if html:
+                            ctype = str(fetch_res.get("content_type") or "").lower()
+                            seo_ctx = None
+                            if (self.audit_seo and src_http is not None and 200 <= src_http <= 299
+                                    and (not ctype or "html" in ctype)):
+                                seo_ctx = (fetch_res.get("x_robots_tag") or "", now_iso)
                             (raw_occ, extracted_rels, biz, pt, clf_method, tag_1, tag_2,
+ 
+                             raw_img, extracted_imgs, page_title, seo_row) = await loop.run_in_executor(
+                                parse_pool, self._parse_and_classify, src_url, final_src_url, html, seo_ctx
+
                              raw_img, extracted_imgs, page_title, seo_meta) = await loop.run_in_executor(
                                 parse_pool, self._parse_and_classify, src_url, final_src_url, html
+main
                             )
                         else:
                             clf_res = self.classifier.classify_from_html(src_url, final_src_url, "")
@@ -3056,7 +3168,10 @@ class OnPageAuditEngine:
                             norm_found = er["normalized_found_url"]
                             scope = er["found_url_scope"]
                             val_detail = None
-                            if er["is_http"]:
+                            if er.get("not_requested"):
+                                val_src = "NOT_REQUESTED"
+                                rel_remark = "Form action — recorded, not requested (a GET could have side effects or answer 405)"
+                            elif er["is_http"]:
                                 if norm_found not in self._seen_http_dests:
                                     self._seen_http_dests.add(norm_found)
                                     val_src = "NEW_CHECK"
@@ -3199,6 +3314,7 @@ class OnPageAuditEngine:
                             "twitter_card": seo_meta.get("twitter_card", ""),
                             "remark": fetch_res["remark"],
                             "checked_at": now_iso,
+                            "_seo": seo_row,   # written in the same transaction as the page
                         }
                         self._rels_discovered += len(rel_rows)
                         self._img_rels_discovered += len(img_rows)

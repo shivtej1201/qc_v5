@@ -90,6 +90,55 @@ ACTIONS: Dict[str, str] = {
     "NON_HTML_SOURCE": "Sitemap URL is not an HTML page (Content-Type). Confirm it belongs in the page sitemap.",
     "SLOW_RESPONSE": "Page took more than 3 s to respond. Investigate server/CDN performance.",
     "CLASSIFICATION_NEEDS_REVIEW": "Business/page type could not be determined from tags, data-pageType or URL. Add tag-1/tag-2 meta tags.",
+claude/crawlpulse-backend-hardening
+    # ---- SEO / technical SEO (seo_audit.py + cross-page checks in the packager)
+    "TITLE_TOO_SHORT": "Title is short. Write a specific 30-60 character title with the page's main topic first.",
+    "TITLE_TOO_LONG": "Title is over ~60 characters and will be truncated in results. Shorten it; keep the key phrase first.",
+    "MULTIPLE_TITLE_TAGS": "Page has more than one <title>. Keep exactly one in <head> (check templates/plugins injecting a second).",
+    "DUPLICATE_TITLE": "Several pages share this title. Give each page a unique title that describes its own content.",
+    "META_DESCRIPTION_MISSING": "Add a unique 70-160 character meta description summarizing the page (it is often the search snippet).",
+    "META_DESCRIPTION_TOO_SHORT": "Meta description is short. Expand to 70-160 characters with a clear value proposition.",
+    "META_DESCRIPTION_TOO_LONG": "Meta description exceeds ~160 characters and will be cut. Tighten it.",
+    "MULTIPLE_META_DESCRIPTIONS": "More than one meta description. Keep exactly one.",
+    "DUPLICATE_META_DESCRIPTION": "Several pages share this meta description. Write a unique description per page.",
+    "H1_MISSING": "Add one visible <h1> that states the page topic.",
+    "MULTIPLE_H1": "Use a single <h1> for the main topic; demote the others to <h2>/<h3>.",
+    "H1_EMPTY": "The <h1> has no text (e.g. only an image). Add descriptive heading text.",
+    "DUPLICATE_H1": "Several pages share this H1. Make each page's main heading specific to that page.",
+    "HEADING_LEVEL_SKIPPED": "Heading levels skip (e.g. h2 -> h4). Use sequential levels for accessibility and structure.",
+    "OPEN_GRAPH_INCOMPLETE": "Add og:title, og:description and og:image so shares on social/messaging apps render a rich preview.",
+    "NOINDEX_IN_SITEMAP": "Page is noindex but listed in the sitemap: conflicting signals. Remove it from the sitemap, or remove noindex if it should rank.",
+    "PAGE_NOFOLLOW": "Page-level nofollow stops link signals flowing to linked pages. Remove it unless intentional.",
+    "CANONICAL_OUTSIDE_HEAD": "rel=canonical is in <body>, where search engines ignore it. Move it into <head>.",
+    "META_REFRESH": "Meta refresh redirect. Replace with a server-side 301 redirect.",
+    "HTML_LANG_MISSING": "Add <html lang=\"..\"> with the page language (accessibility + language targeting).",
+    "VIEWPORT_MISSING": "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> (mobile-first indexing).",
+    "MIXED_CONTENT": "HTTPS page loads http:// resources (blocked or flagged by browsers). Switch them to https://.",
+    "STRUCTURED_DATA_INVALID": "JSON-LD does not parse, so search engines ignore it. Fix the syntax (validate with a Rich Results test).",
+    "STRUCTURED_DATA_MISSING": "No structured data. Consider schema.org markup suited to the page (Organization, BreadcrumbList, FAQPage, Product...).",
+    "INTERNAL_NOFOLLOW_LINKS": "Internal links with rel=nofollow waste internal link equity. Remove nofollow from internal links.",
+    "JS_RENDERING_SUSPECTED": "Serve the main content and links in the initial HTML (SSR/prerendering), or verify with a rendered crawl: search engines and this HTTP audit see an almost empty page.",
+    "THIN_CONTENT": "Little visible text. Expand with useful, unique content, or noindex/consolidate the page if it has no search value.",
+    "DUPLICATE_CONTENT": "Visible text is identical to other audited pages. Consolidate, differentiate, or canonicalize to one version.",
+    "HREFLANG_INVALID_CODE": "Use valid ISO 639-1 language (+ optional ISO 3166-1 region) codes, e.g. en-GB not en-UK; x-default for the fallback.",
+    "HREFLANG_MISSING_SELF_REFERENCE": "Each page's hreflang set must include a self-referencing entry. Add one for this URL.",
+    "HREFLANG_MISSING_X_DEFAULT": "Add hreflang=\"x-default\" pointing to the language selector / default version.",
+    "HREFLANG_CONFLICT": "One hreflang code points to several URLs. Keep exactly one URL per language-region.",
+    "HREFLANG_NOT_RECIPROCAL": "The alternate page does not link back. hreflang must be bidirectional: add the return link on the target page.",
+    "URL_HAS_UPPERCASE": "Use lowercase URLs; uppercase variants create duplicates on case-sensitive servers.",
+    "URL_HAS_UNDERSCORES": "Prefer hyphens to separate words in URLs.",
+    "URL_DOUBLE_SLASH": "Remove the duplicate slash from the path (and 301 the old form).",
+    "SITEMAP_URL_HAS_PARAMETERS": "Sitemaps should list clean canonical URLs. Remove parameterized URLs or list their canonical.",
+    "URL_TOO_LONG": "Shorten the URL to a concise, readable path.",
+    "TRAILING_SLASH_DUPLICATE": "Both slash and no-slash versions are in the sitemap. Pick one form, 301 the other, list only one.",
+    "ORPHAN_PAGE": "No audited page links to this URL. Add internal links from relevant pages (only sitemap/search can discover it now).",
+    "NOT_IN_SITEMAP": "Internal 200 HTML page linked from the site but missing from the sitemap. Add it, or noindex/redirect it if it should not rank.",
+    "SITEMAP_FETCH_FAILED": "The sitemap file could not be fetched or parsed, so its URLs are not discoverable. Fix the URL/server/XML.",
+    "SITEMAP_TOO_LARGE": "A sitemap file is limited to 50,000 URLs / 50 MB uncompressed. Split it and reference the parts from a sitemap index.",
+    "SITEMAP_DUPLICATE_URLS": "The sitemap repeats URLs (here or in another sitemap). List each URL once.",
+    "SITEMAP_LASTMOD_MISSING": "Add <lastmod> (W3C date) so crawlers can prioritize changed pages.",
+    "SITEMAP_LASTMOD_INVALID": "<lastmod> is not a W3C Datetime (YYYY-MM-DD or full ISO 8601 with timezone). Fix the format.",
+    "SITEMAP_LASTMOD_FUTURE": "<lastmod> is in the future. Set it to the page's real last modification date.",
     # On-page SEO & Content signals
     "ROBOTS_NOINDEX": "Sitemap URL has meta robots noindex tag. Remove noindex or exclude the page from the sitemap.",
     "TITLE_TOO_SHORT": "Page title is shorter than 30 characters. Expand to 30-65 characters.",
@@ -101,9 +150,16 @@ ACTIONS: Dict[str, str] = {
     "MULTIPLE_H1": "Page has multiple H1 headings. Keep a single primary H1 heading and use H2 for subheadings.",
     "LOW_WORD_COUNT": "Page has thin content (under 100 words). Add relevant, helpful content.",
     "INSECURE_MIXED_CONTENT": "HTTPS page loads insecure HTTP sub-resources (scripts, styles, media). Update resources to https://.",
+main
 }
 
-ELEMENT_CATEGORY = {"CANONICAL": "CANONICAL", "HREFLANG": "HREFLANG", "IFRAME": "IFRAME"}
+ELEMENT_CATEGORY = {"CANONICAL": "CANONICAL", "HREFLANG": "HREFLANG", "IFRAME": "IFRAME",
+                    "SCRIPT": "RESOURCE", "STYLESHEET": "RESOURCE", "LINK_RESOURCE": "RESOURCE",
+                    "CSS_RESOURCE": "RESOURCE", "MEDIA": "RESOURCE", "EMBED": "RESOURCE",
+                    "SOCIAL_URL": "METADATA_URL", "JSONLD_URL": "METADATA_URL", "META_REFRESH": "LINK",
+                    "FORM": "FORM"}
+# categories whose broken status issues mirror 07_broken_urls.csv (trust gate)
+LINK_STATUS_CATEGORIES = frozenset({"LINK", "CANONICAL", "HREFLANG", "IFRAME", "RESOURCE", "METADATA_URL", "FORM"})
 
 CANONICAL_ACTIONS = {
     "REDIRECTED": "Canonical points to a redirecting URL. Point rel=canonical at the final 200 URL.",
@@ -209,6 +265,8 @@ def link_issues(r: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
         return [(category, "INVALID_URL", "MEDIUM", f"Malformed href: {str(r['found_url'])[:120]}")]
     if scope not in ("INTERNAL", "EXTERNAL"):
         return out          # mailto:/tel:/fragment: recorded in 03, not an issue
+    if r.get("base_validation_source") == "NOT_REQUESTED" and not r.get("validation_state"):
+        return out          # form action: recorded, deliberately not requested
     st = _status_issue(r["status_bucket"], r["http_status"], r["initial_status"], r["hop_count"],
                        r["error_type"], r["status_classification"], r["validation_state"])
     if st:

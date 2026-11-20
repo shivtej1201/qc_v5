@@ -147,6 +147,9 @@ class RemediationEngine:
         meta_findings = await self._analyze_metadata(job_id)
         raw_findings.extend(meta_findings)
 
+        # 7. On-page audit issues (persisted by the on-page report package)
+        raw_findings.extend(await self._analyze_on_page_issues(job_id))
+
         # Deduplicate findings by (category, normalized target_url)
         unique_findings: Dict[str, Dict[str, Any]] = {}
         for f in raw_findings:
@@ -186,8 +189,8 @@ class RemediationEngine:
             finding["priority"] = prio
             finding["remediation_id"] = generate_stable_rem_id(category, target_url)
 
-            # Generate structured explanation
-            explanation = await self.ai.generate_explanation(finding)
+            # Generate structured explanation (on-page findings carry their own deterministic, data-derived text)
+            explanation = finding.pop("explanation", None) or await self.ai.generate_explanation(finding)
             
             remediations.append({
                 "job_id": job_id,
@@ -213,6 +216,78 @@ class RemediationEngine:
         # Sort by priority_score descending
         remediations.sort(key=lambda r: r["priority_score"], reverse=True)
         return remediations
+
+    ON_PAGE_SITEWIDE_THRESHOLD = 25
+    ON_PAGE_SEVERITY = {"HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW"}   # INFO findings are not remediations
+
+    async def _analyze_on_page_issues(self, job_id: str) -> List[Dict[str, Any]]:
+        """Group on_page_issues into remediation items with ONE aggregate query per grouping (no N+1):
+        * destination issues (links, resources, images): one item per broken/redirecting URL, listing the pages;
+        * page issues: one item per page, or one site-wide item when a rule affects > 25 pages."""
+        from issue_store import ISSUE_SCHEMA_SQL
+        from on_page_issue_rules import action_for
+        await self.db.conn.executescript(ISSUE_SCHEMA_SQL)
+        async with self.db.conn.execute("SELECT 1 FROM on_page_issues WHERE job_id = ? LIMIT 1", (job_id,)) as cur:
+            if await cur.fetchone() is None:
+                return []
+        dest_cats = "('LINK','IFRAME','RESOURCE','METADATA_URL','FORM','IMAGE','CANONICAL','HREFLANG')"
+        # worst severity by rank (string MAX would rank MEDIUM above HIGH)
+        worst = ("CASE MIN(CASE severity WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END) "
+                 "WHEN 0 THEN 'HIGH' WHEN 1 THEN 'MEDIUM' ELSE 'LOW' END")
+        findings: List[Dict[str, Any]] = []
+
+        def item(rule, category, severity, target, pages, count, detail, kind):
+            action = action_for(rule, category)
+            human = rule.replace("_", " ").capitalize()
+            return {
+                "category": f"ONPAGE_{rule}", "severity": self.ON_PAGE_SEVERITY[severity], "target_url": target,
+                "source_urls": [p for p in (pages or "").split("\x1f") if p][:50], "source_count": max(1, count),
+                "confidence": 1.0,
+                "technical_details": {"rule_code": rule, "issue_category": category, "detail": detail, "scope": kind},
+                "explanation": {
+                    "title": f"{human}: {target}"[:300],
+                    "description": f"{human} detected by the on-page audit on {count} page(s). Example: {detail}"[:1000],
+                    "impact": {"HIGH": "Broken for users and search engines; fix first.",
+                               "MEDIUM": "Wrong or risky; affects indexing, UX or crawl efficiency.",
+                               "LOW": "Hygiene issue; wastes crawl budget or weakens signals."}[severity],
+                    "recommended_action": action,
+                    "priority_rationale": f"{severity} severity across {count} page(s) (deterministic rule {rule}).",
+                },
+            }
+
+        async with self.db.conn.execute(
+                f"""SELECT rule_code, category, {worst}, subject_url, COUNT(*), GROUP_CONCAT(page_url, char(31)), MIN(detail)
+                      FROM (SELECT rule_code, category, subject_url, page_url, MIN(severity) AS severity, MIN(detail) AS detail
+                              FROM on_page_issues
+                             WHERE job_id = ? AND category IN {dest_cats} AND severity IN ('HIGH','MEDIUM','LOW')
+                               AND subject_url != ''
+                             GROUP BY rule_code, category, subject_url, page_url)
+                     GROUP BY rule_code, category, subject_url""", (job_id,)) as cur:
+            for rule, cat, sev, subject, n, pages, detail in await cur.fetchall():
+                findings.append(item(rule, cat, sev, subject, pages, n, detail, "destination"))
+        async with self.db.conn.execute(
+                f"""SELECT rule_code, category, {worst}, COUNT(DISTINCT page_url), MIN(page_url), MIN(detail)
+                      FROM on_page_issues
+                     WHERE job_id = ? AND (category NOT IN {dest_cats} OR subject_url = '')
+                       AND severity IN ('HIGH','MEDIUM','LOW')
+                     GROUP BY rule_code, category""", (job_id,)) as cur:
+            rule_rows = await cur.fetchall()
+        for rule, cat, sev, n, first_page, detail in rule_rows:
+            if n > self.ON_PAGE_SITEWIDE_THRESHOLD:
+                root = urllib.parse.urlunsplit(urllib.parse.urlsplit(first_page)[:2] + ("/", "", ""))
+                async with self.db.conn.execute(
+                        "SELECT DISTINCT page_url FROM on_page_issues WHERE job_id = ? AND rule_code = ? AND category = ? LIMIT 50",
+                        (job_id, rule, cat)) as cur:
+                    sample = "\x1f".join(r[0] for r in await cur.fetchall())
+                findings.append(item(rule, cat, sev, root, sample, n, detail, "site-wide"))
+            else:
+                async with self.db.conn.execute(
+                        f"SELECT page_url, {worst}, MIN(detail) FROM on_page_issues WHERE job_id = ? AND rule_code = ? "
+                        "AND category = ? GROUP BY page_url", (job_id, rule, cat)) as cur:
+                    for page, psev, pdetail in await cur.fetchall():
+                        findings.append(item(rule, cat, psev if psev in self.ON_PAGE_SEVERITY else sev, page, page, 1,
+                                             pdetail, "page"))
+        return findings
 
     async def _analyze_link_destinations(self, job_id: str) -> List[Dict[str, Any]]:
         findings = []

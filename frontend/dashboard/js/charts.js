@@ -69,7 +69,7 @@ export function barList(rows, { max } = {}) {
   for (const r of rows) {
     const fill = h("i", { style: { background: r.color || "linear-gradient(90deg,var(--brand-500),var(--accent-500))" } });
     out.append(h("div", { class: "bar-row", title: r.title || "" },
-      h("span", { class: "truncate" }, r.label), h("div", { class: "track" }, fill), h("span", { class: "num" }, fmt.n(r.value))));
+      h("span", { class: "truncate" }, r.label), h("div", { class: "track" }, fill), h("span", { class: "num" }, r.display ?? fmt.n(r.value))));
     const w = `${(100 * (r.value || 0)) / m}%`;
     if (reducedMotion()) fill.style.width = w;
     else requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = w; }));

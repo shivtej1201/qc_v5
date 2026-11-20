@@ -102,6 +102,9 @@ const ICONS = {
   back: "M15 18l-6-6 6-6",
   refresh: "M4 4v6h6M20 20v-6h-6M5.5 15a7 7 0 0011.9 2.5M18.5 9A7 7 0 006.6 6.5",
   classic: "M4 5h16v14H4zM4 9h16",
+  sitemap: "M10 3h4v4h-4zM4 17h4v4H4zM10 17h4v4h-4zM16 17h4v4h-4zM12 7v5M6 17v-5h12v5",
+  seo: "M11 4a7 7 0 100 14 7 7 0 000-14zM20 20l-4-4M8 11l2 2 4-4",
+  trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
 };
 export function icon(name) {
   return h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },

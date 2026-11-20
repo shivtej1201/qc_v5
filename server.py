@@ -469,13 +469,40 @@ onpage = OnPageAuditService(db_path=db.db_path, allow_local=getattr(settings, "A
                             reports_dir=os.environ.get("QC_ONPAGE_REPORTS_DIR") or None)
 
 
+class OnPageSitemapSelection(BaseModel):
+    import_id: str
+    selected_sitemaps: Optional[List[str]] = None
+    include: Optional[List[str]] = None
+    exclude: Optional[List[str]] = None
+    max_pages: int = 0
+    include_robots_blocked: bool = False
+
+
 class OnPageStartRequest(BaseModel):
     name: str = "On-page audit"
     urls: Optional[List[str]] = None
-    sitemap_import_id: Optional[str] = None
+    sitemap_import_id: Optional[str] = None      # classic /api/sitemaps import (selected URLs)
+    sitemap: Optional[OnPageSitemapSelection] = None   # dashboard sitemap config (/api/on-page/sitemaps)
     preset: str = "conservative"
     overrides: Optional[Dict[str, Any]] = None
     primary_domain: Optional[str] = None
+
+
+class OnPageSitemapDiscoverRequest(BaseModel):
+    inputs: List[str]
+    max_urls: int = 50000
+
+
+class OnPageSitemapProfile(BaseModel):
+    name: str
+    inputs: List[str]
+    primary_domain: Optional[str] = None
+    selected_sitemaps: Optional[List[str]] = None
+    include: Optional[List[str]] = None
+    exclude: Optional[List[str]] = None
+    max_pages: int = 0
+    preset: str = "conservative"
+    overrides: Optional[Dict[str, Any]] = None
 
 
 def _onpage_call(fn, *a, **k):
@@ -509,8 +536,76 @@ async def onpage_list():
     return {"audits": jobs}
 
 
+@app.post("/api/on-page/sitemaps/discover")
+async def onpage_sitemap_discover(req: OnPageSitemapDiscoverRequest):
+    """Fetch + parse sitemaps (from sitemap URLs, robots.txt or a domain) into a reusable import snapshot."""
+    if not req.inputs or len(req.inputs) > 20:
+        raise HTTPException(400, "Provide 1-20 sitemap URLs, robots.txt URLs or domains")
+    try:
+        return await onpage.discover_sitemaps(req.inputs, max_urls=min(req.max_urls, settings.MAX_URLS_PER_JOB))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/on-page/sitemaps/{import_id}")
+async def onpage_sitemap_import(import_id: str):
+    return _onpage_call(lambda i: onpage.sitemaps.describe_import(onpage.sitemaps.load_import(i)), import_id)
+
+
+@app.post("/api/on-page/sitemaps/{import_id}/preview")
+async def onpage_sitemap_preview(import_id: str, sel: OnPageSitemapSelection):
+    return _onpage_call(onpage.sitemap_selection, import_id, selected_sitemaps=sel.selected_sitemaps,
+                        include=sel.include, exclude=sel.exclude, max_pages=sel.max_pages,
+                        include_robots_blocked=sel.include_robots_blocked)
+
+
+@app.get("/api/on-page/sitemap-profiles")
+async def onpage_profiles():
+    return {"profiles": onpage.sitemaps.list_profiles()}
+
+
+@app.post("/api/on-page/sitemap-profiles")
+async def onpage_profile_create(p: OnPageSitemapProfile):
+    return _onpage_call(onpage.sitemaps.save_profile, p.dict())
+
+
+@app.put("/api/on-page/sitemap-profiles/{profile_id}")
+async def onpage_profile_update(profile_id: str, p: OnPageSitemapProfile):
+    return _onpage_call(onpage.sitemaps.save_profile, p.dict(), profile_id)
+
+
+@app.delete("/api/on-page/sitemap-profiles/{profile_id}")
+async def onpage_profile_delete(profile_id: str):
+    _onpage_call(onpage.sitemaps.delete_profile, profile_id)
+    return {"status": "deleted"}
+
+
+@app.post("/api/on-page/sitemap-profiles/{profile_id}/run")
+async def onpage_profile_run(profile_id: str):
+    """Re-discover the profile's sitemaps and launch an audit with its saved selection."""
+    try:
+        return await onpage.run_profile(profile_id)
+    except AuditConflict as e:
+        raise HTTPException(409, str(e))
+    except KeyError:
+        raise HTTPException(404, "Unknown profile")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/on-page/audits/{job_id}/seo")
+async def onpage_seo(job_id: str):
+    return _onpage_call(onpage.seo_overview, job_id)
+
+
 @app.post("/api/on-page/audits")
 async def onpage_start(req: OnPageStartRequest):
+    if req.sitemap:
+        sm = req.sitemap
+        return _onpage_call(onpage.start_from_sitemap, sm.import_id, name=req.name, preset=req.preset,
+                            overrides=req.overrides, primary_domain=req.primary_domain,
+                            selected_sitemaps=sm.selected_sitemaps, include=sm.include, exclude=sm.exclude,
+                            max_pages=sm.max_pages, include_robots_blocked=sm.include_robots_blocked)
     urls = list(req.urls or [])
     if req.sitemap_import_id:
         urls += await db.get_selected_urls_for_crawl(req.sitemap_import_id)
@@ -548,11 +643,21 @@ async def onpage_start_upload(file: UploadFile = File(...), name: str = Form("On
     return _onpage_call(onpage.start, name, urls, preset, overrides, primary_domain)
 
 
+class OnPageIssueStatus(BaseModel):
+    status: str
+    note: str = ""
+
+
 @app.get("/api/on-page/audits/{job_id}")
 async def onpage_detail(job_id: str):
     d = _onpage_call(onpage.describe, job_id)
     d["stats"] = await db.get_on_page_audit_stats(job_id)
+    d["progress"] = onpage.progress(job_id, d["stats"])
     d["health"] = onpage.health_score(job_id)
+    try:
+        d["score"] = onpage.score(job_id)
+    except KeyError:
+        d["score"] = None
     d["log_tail"] = onpage.log_tail(job_id, 15)
     return d
 
@@ -568,6 +673,77 @@ async def onpage_health_detail(job_id: str):
 @app.post("/api/on-page/audits/{job_id}/stop")
 async def onpage_stop(job_id: str):
     return _onpage_call(onpage.stop, job_id)
+
+
+@app.post("/api/on-page/audits/{job_id}/pause")
+async def onpage_pause(job_id: str):
+    return _onpage_call(onpage.pause, job_id)
+
+
+@app.post("/api/on-page/audits/{job_id}/cancel")
+async def onpage_cancel(job_id: str):
+    return _onpage_call(onpage.cancel, job_id)
+
+
+@app.get("/api/on-page/audits/{job_id}/progress")
+async def onpage_progress(job_id: str):
+    _onpage_call(onpage.describe, job_id)
+    stats = await db.get_on_page_audit_stats(job_id)
+    return {"lifecycle": onpage.lifecycle(job_id), **onpage.progress(job_id, stats)}
+
+
+@app.get("/api/on-page/audits/{job_id}/score")
+async def onpage_score(job_id: str):
+    try:
+        return _onpage_call(onpage.score, job_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise HTTPException(404, "Score not calculated yet (it is computed when the report is built)")
+        raise
+
+
+@app.get("/api/on-page/audits/{job_id}/url-detail")
+async def onpage_url_detail(job_id: str, url: str):
+    if not url or len(url) > 4000:
+        raise HTTPException(400, "url is required (<= 4000 characters)")
+    return await asyncio.to_thread(_onpage_call, onpage.url_detail, job_id, url)
+
+
+@app.patch("/api/on-page/audits/{job_id}/issues/{issue_key}/status")
+async def onpage_issue_status(job_id: str, issue_key: str, body: OnPageIssueStatus):
+    return _onpage_call(onpage.set_issue_status, job_id, issue_key, body.status, body.note)
+
+
+def _explorer_args(limit: int, offset: int, order: str):
+    if limit < 1 or limit > 500 or offset < 0:
+        raise HTTPException(400, "limit must be 1-500 and offset >= 0")
+    if order not in ("asc", "desc"):
+        raise HTTPException(400, "order must be asc or desc")
+
+
+@app.get("/api/on-page/audits/{job_id}/urls")
+async def onpage_urls(job_id: str, status_bucket: Optional[str] = None, crawl_state: Optional[str] = None,
+                      q: Optional[str] = None, sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+    _explorer_args(limit, offset, order)
+    return await asyncio.to_thread(_onpage_call, onpage.urls, job_id, status_bucket, crawl_state, q, sort, order, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/links")
+async def onpage_links(job_id: str, scope: Optional[str] = None, url_type: Optional[str] = None,
+                       status_bucket: Optional[str] = None, source_page: Optional[str] = None, q: Optional[str] = None,
+                       sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+    _explorer_args(limit, offset, order)
+    return await asyncio.to_thread(_onpage_call, onpage.links, job_id, scope, url_type, status_bucket, source_page, q,
+                                   sort, order, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/images")
+async def onpage_images(job_id: str, internal_external: Optional[str] = None, status_bucket: Optional[str] = None,
+                        alt: Optional[str] = None, source_page: Optional[str] = None, q: Optional[str] = None,
+                        sort: str = "", order: str = "asc", offset: int = 0, limit: int = 100):
+    _explorer_args(limit, offset, order)
+    return await asyncio.to_thread(_onpage_call, onpage.images, job_id, internal_external, status_bucket, alt,
+                                   source_page, q, sort, order, offset, limit)
 
 
 @app.post("/api/on-page/audits/{job_id}/resume")
@@ -588,10 +764,23 @@ async def onpage_issue_overview(job_id: str):
 
 @app.get("/api/on-page/audits/{job_id}/issues")
 async def onpage_issues(job_id: str, severity: Optional[str] = None, issue_type: Optional[str] = None,
-                        category: Optional[str] = None, q: Optional[str] = None, offset: int = 0, limit: int = 100):
+                        category: Optional[str] = None, q: Optional[str] = None, status: Optional[str] = None,
+                        page_url: Optional[str] = None, sort: str = "", order: str = "asc",
+                        offset: int = 0, limit: int = 100):
     if severity and severity not in ("HIGH", "MEDIUM", "LOW", "INFO"):
         raise HTTPException(400, "severity must be HIGH, MEDIUM, LOW or INFO")
-    return _onpage_call(onpage.issues, job_id, severity, issue_type, category, q, offset, limit)
+    if status and status.upper() not in ("OPEN", "IN_PROGRESS", "VERIFIED", "RESOLVED", "DISMISSED"):
+        raise HTTPException(400, "status must be OPEN, IN_PROGRESS, VERIFIED, RESOLVED or DISMISSED")
+    if status or page_url or sort or order != "asc":
+        _explorer_args(limit, offset, order)
+        return await asyncio.to_thread(_onpage_call, onpage.issues_db, job_id, severity, issue_type, category, status,
+                                       q, page_url, sort, order, offset, limit)
+    return await asyncio.to_thread(_onpage_call, onpage.issues, job_id, severity, issue_type, category, q, offset, limit)
+
+
+@app.get("/api/on-page/audits/{job_id}/issues/{issue_key}")
+async def onpage_issue_detail(job_id: str, issue_key: str):
+    return await asyncio.to_thread(_onpage_call, onpage.issue_detail, job_id, issue_key)
 
 
 @app.get("/api/on-page/audits/{job_id}/pages")
@@ -824,7 +1013,7 @@ async def update_job_remediation(job_id: str, remediation_id: str, body: Remedia
     if not re.match(r'^[a-zA-Z0-9_\-]+$', remediation_id):
         raise HTTPException(status_code=400, detail="Invalid remediation ID format")
         
-    allowed_statuses = {"OPEN", "IN_PROGRESS", "RESOLVED", "DISMISSED", "NEEDS_REVIEW"}
+    allowed_statuses = {"OPEN", "IN_PROGRESS", "VERIFIED", "RESOLVED", "DISMISSED", "NEEDS_REVIEW"}
     status_upper = body.status.strip().upper()
     if status_upper not in allowed_statuses:
         raise HTTPException(

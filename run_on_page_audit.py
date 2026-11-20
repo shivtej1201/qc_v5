@@ -62,7 +62,49 @@ def parse_args(argv=None):
     p.add_argument("--max-source-bytes", type=int, default=5 * 1024 * 1024)
     p.add_argument("--stop-file", default="", help="graceful stop when this file appears (cross-platform)")
     p.add_argument("--result-json", default="", help="write the run result (status, metrics, package) here")
+    p.add_argument("--sitemap-meta", default="",
+                   help="JSON from sitemap_config (page -> sitemap/lastmod, sitemap tree) for the sitemap + SEO reports")
+    p.add_argument("--no-seo", action="store_true", help="skip SEO / technical-SEO page facts")
+    p.add_argument("--events-log", default="", help="structured JSON-lines stage log (default: <out-dir>/events.jsonl)")
     return p.parse_args(argv)
+
+
+class EventLog:
+    """Structured JSON-lines log (one object per pipeline stage) for observability:
+    {"ts", "job_id", "project_id", "stage": sitemap|inventory|crawl|export|error, "event", ...counts/durations}."""
+
+    def __init__(self, path: str, job_id: str, project_id: str):
+        self.path, self.job_id, self.project_id = path, job_id, project_id
+        if path:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+    def __call__(self, stage: str, event: str, **kw):
+        if not self.path:
+            return
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z", "job_id": self.job_id,
+               "project_id": self.project_id, "stage": stage, "event": event, **kw}
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
+
+
+def store_sitemap_meta(conn, job_id: str, meta: dict):
+    """Idempotent (safe on resume): page -> sitemap/lastmod and the sitemap tree with fetch/hygiene stats."""
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO on_page_sitemap_entries (job_id, normalized_url, sitemap_url, lastmod, changefreq, priority) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(job_id, URLNormalizer.normalize(e["u"]), e.get("sm") or "", str(e.get("lastmod") or "")[:60],
+              str(e.get("changefreq") or "")[:20], e.get("priority")) for e in meta.get("entries", [])])
+        conn.executemany(
+            "INSERT OR IGNORE INTO on_page_sitemap_sources (job_id, sitemap_url, parent_sitemap_url, depth, kind, status, "
+            "http_status, classification, urls_listed, duplicates, rejected, size_bytes, selected, error_message, "
+            "content_type, response_time_ms, child_sitemap_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(job_id, s["sitemap_url"], s.get("parent_sitemap_url") or "", int(s.get("depth") or 0), s.get("kind") or "",
+              s.get("status") or "", s.get("http_status"), s.get("classification") or "", int(s.get("urls_listed") or 0),
+              int(s.get("duplicates") or 0), int(s.get("rejected") or 0), int(s.get("size_bytes") or 0),
+              int(s.get("selected", 1)), str(s.get("error_message") or "")[:300], str(s.get("content_type") or "")[:120],
+              float(s.get("response_time_ms") or 0.0), int(s.get("child_sitemap_count") or 0))
+             for s in meta.get("sources", [])])
 
 
 def run(a) -> dict:
@@ -76,10 +118,39 @@ def run(a) -> dict:
     if a.per_host_concurrency > settings.LINK_AUDIT_PER_HOST_CONCURRENCY:
         settings.LINK_AUDIT_PER_HOST_CONCURRENCY = a.per_host_concurrency
 
-    with open(a.urls, encoding="utf-8") as f:
-        urls = [u.strip() for u in f if u.strip()]
-    entries = [{"original_url": u, "normalized_url": URLNormalizer.normalize(u), "source_sitemap": os.path.basename(a.urls),
-                "source_sitemap_number": 1} for u in urls]
+    with open(a.urls, encoding="utf-8-sig") as f:
+        raw_lines = [u.strip() for u in f]
+    # Input accounting: every non-empty line becomes a source page OR an input exception (never dropped silently)
+    urls, exceptions, first_of = [], [], {}
+    input_total = 0
+    for line_no, u in enumerate(raw_lines, 1):
+        if not u:
+            continue
+        input_total += 1
+        n = URLNormalizer.normalize(u) if u.lower().startswith(("http://", "https://")) else ""
+        if not n or not URLNormalizer.is_valid_http_url(n):
+            exceptions.append((line_no, u[:2000], n[:2000], "INVALID_URL", ""))
+        elif n in first_of:
+            prev = first_of[n]
+            exceptions.append((line_no, u[:2000], n, "EXACT_DUPLICATE" if prev == u else "NORMALIZED_DUPLICATE", prev))
+        else:
+            first_of[n] = u
+            urls.append(u)
+    ev = EventLog(a.events_log or os.path.join(a.out_dir, "events.jsonl"), a.job_id, a.primary_domain)
+    ev("inventory", "loaded", input_lines=input_total, pages=len(urls), exceptions=len(exceptions),
+       exception_reasons={r: sum(1 for e in exceptions if e[3] == r) for r in {e[3] for e in exceptions}})
+    sm_meta = None
+    if a.sitemap_meta:
+        with open(a.sitemap_meta, encoding="utf-8") as f:
+            sm_meta = json.load(f)
+    sm_of = {URLNormalizer.normalize(e["u"]): e for e in (sm_meta or {}).get("entries", [])}
+    sm_num = {s["sitemap_url"]: i for i, s in enumerate((sm_meta or {}).get("sources", []), 1)}
+    entries = []
+    for u in urls:
+        n = URLNormalizer.normalize(u)
+        sm = (sm_of.get(n) or {}).get("sm") or os.path.basename(a.urls)
+        entries.append({"original_url": u, "normalized_url": n, "source_sitemap": sm,
+                        "source_sitemap_number": sm_num.get(sm, 1)})
 
     budgets = {}
     for spec in a.host_budget:
@@ -99,7 +170,7 @@ def run(a) -> dict:
         probe_url=a.probe_url or None, akamai_cooldown_sec=a.akamai_cooldown_sec,
         read_timeout=a.read_timeout, max_retries=a.max_retries, progress_json_path=a.progress_json or None,
         host_budgets=budgets, host_budget_cooldown_sec=a.host_budget_cooldown_sec,
-        max_source_bytes=a.max_source_bytes,
+        max_source_bytes=a.max_source_bytes, audit_seo=not a.no_seo,
     )
     proc = psutil.Process()
     peak = {"rss": 0.0, "cpu": []}
@@ -133,6 +204,17 @@ def run(a) -> dict:
 
     try:
         eng.initialize_inventory(entries)
+        with eng.conn:
+            eng.conn.executemany(
+                "INSERT OR IGNORE INTO on_page_input_exceptions (job_id, line_no, input_url, normalized_url, reason, duplicate_of) "
+                "VALUES (?, ?, ?, ?, ?, ?)", [(a.job_id, *e) for e in exceptions])
+            eng.conn.execute("UPDATE on_page_audit_jobs SET input_urls_total = ? WHERE job_id = ?", (input_total, a.job_id))
+        if sm_meta:
+            store_sitemap_meta(eng.conn, a.job_id, sm_meta)
+            ev("sitemap", "provenance_loaded", sitemaps=len(sm_meta.get("sources", [])),
+               entries=len(sm_meta.get("entries", [])))
+        ev("crawl", "start", target_rps=a.target_rps, max_rps=a.max_rps, source_concurrency=a.source_concurrency,
+           dest_concurrency=a.dest_concurrency, image_concurrency=a.image_concurrency)
         stats = asyncio.run(_run_with_stop_watch())
     finally:
         eng.close()
@@ -153,12 +235,22 @@ def run(a) -> dict:
     stopped = bool(eng._stop_requested)
     result = {"status": "STOPPED" if stopped else stats.get("status"), "crawl_seconds": round(crawl_sec, 1),
               "stats": stats, "performance": perf, "stopped": stopped}
+    ev("crawl", "stopped" if stopped else "end", status=result["status"], crawl_seconds=result["crawl_seconds"],
+       pages=stats.get("source_pages_processed"), failed=stats.get("source_pages_failed"),
+       blocked=stats.get("source_pages_blocked"), links=stats.get("url_relationships_persisted"),
+       images=stats.get("image_relationships_persisted"), primary_rps=perf.get("achieved_primary_rps"),
+       waf_events=perf.get("waf_events"), timeouts=perf.get("timeouts"), retries=eng.metrics.get("retries", 0))
     if not a.no_package and not a.max_pages and not stopped:
         t1 = time.time()
-        pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf)
+        pkg = build_on_page_csv_package(a.db, a.job_id, a.out_dir, package_name=a.package_name, performance=perf,
+                                        project_id=a.primary_domain)
         result["package"] = {k: v for k, v in pkg.items() if k != "summary"}
         result["package_seconds"] = round(time.time() - t1, 1)
         result["final_qc_status"] = pkg["final_qc_status"]
+        ev("export", "package_built", final_qc_status=pkg["final_qc_status"], csv_seconds=pkg.get("csv_seconds"),
+           zip_seconds=pkg.get("zip_seconds"), zip_bytes=pkg.get("zip_bytes"), files=len(pkg.get("files", {})),
+           issues=pkg["files"].get("12_issues.csv"), score=(pkg.get("score") or {}).get("score"),
+           failed_checks=[r["check"] for r in pkg.get("reconciliation", []) if r["status"] != "PASS"])
     if a.result_json:
         tmp = a.result_json + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:

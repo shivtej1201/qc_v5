@@ -21,8 +21,10 @@ def _strip_tag_ns(tag: str) -> str:
 
 class RobotsManager:
     """Caches and evaluates robots.txt policies per domain with SSRF validation."""
-    def __init__(self, http_client: httpx.AsyncClient, user_agent: str = "Mozilla/5.0"):
+    def __init__(self, http_client: httpx.AsyncClient, user_agent: str = "Mozilla/5.0",
+                 allow_local: Optional[bool] = None):
         self.http_client = http_client
+        self.allow_local = getattr(settings, "ALLOW_LOCAL_TESTING", False) if allow_local is None else allow_local
         self.user_agent = user_agent
         self.parsers: Dict[str, Optional[urllib.robotparser.RobotFileParser]] = {}
         self.lock = asyncio.Lock()
@@ -36,7 +38,7 @@ class RobotsManager:
                 return self.parsers[origin]
 
             robots_url = f"{origin}/robots.txt"
-            if not URLNormalizer.is_safe_url(robots_url, allow_local=getattr(settings, "ALLOW_LOCAL_TESTING", False)):
+            if not URLNormalizer.is_safe_url(robots_url, allow_local=self.allow_local):
                 self.parsers[origin] = None
                 return None
 
@@ -120,7 +122,8 @@ class SitemapExtractor:
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LinkAuditorBot/2.0"},
             follow_redirects=False # Manual redirect tracking for SSRF check
         )
-        self.robots_manager = RobotsManager(self.client, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) LinkAuditorBot/2.0")
+        self.robots_manager = RobotsManager(self.client, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) LinkAuditorBot/2.0",
+                                            allow_local=allow_local or None)
         self.semaphore = asyncio.Semaphore(self.concurrency)
 
     async def close(self):
@@ -577,6 +580,15 @@ class SitemapExtractor:
                 errors.append(f"Exceeded maximum sitemap nesting depth of {self.max_depth} for '{current_sitemap}'.")
                 continue
 
+ claude/crawlpulse-backend-hardening
+            # Fetch sitemap
+            t_fetch = time.perf_counter()
+            async with self.semaphore:
+                body, status_code, headers, redirects, diag = await self._safe_fetch(current_sitemap)
+            fetch_meta = {"content_type": str((headers or {}).get("content-type") or (headers or {}).get("Content-Type") or "")[:120],
+                          "response_time_ms": round((time.perf_counter() - t_fetch) * 1000.0, 1),
+                          "size_bytes": len(body or b""), "redirects": len(redirects or [])}
+
             # Fetch sitemap with diagnostics measurement
             t_fetch_start = time.perf_counter()
             async with self.semaphore:
@@ -584,6 +596,7 @@ class SitemapExtractor:
             fetch_time_ms = round((time.perf_counter() - t_fetch_start) * 1000, 2)
             content_type = (headers.get("content-type") or "") if headers else ""
             size_bytes = len(body) if body else 0
+ main
 
             if diag:
                 diagnostics.append({
@@ -631,7 +644,8 @@ class SitemapExtractor:
                     "child_sitemap_count": 0,
                     "urls_found": 0,
                     "error_message": error_msg,
-                    "classification": classification
+                    "classification": classification,
+                    **fetch_meta,
                 })
                 errors.append(f"Failed to fetch sitemap '{current_sitemap}': {error_msg}")
                 if progress_callback:
@@ -668,7 +682,8 @@ class SitemapExtractor:
                     "child_sitemap_count": 0,
                     "urls_found": 0,
                     "error_message": err_msg,
-                    "classification": "SITEMAP_XML_INVALID"
+                    "classification": "SITEMAP_XML_INVALID",
+                    **fetch_meta,
                 })
                 errors.append(f"Invalid XML in sitemap '{current_sitemap}': {err_msg}")
                 if progress_callback:
@@ -690,7 +705,9 @@ class SitemapExtractor:
                     "child_sitemap_count": child_count,
                     "urls_found": child_count,
                     "error_message": "",
-                    "classification": "VALID"
+                    "classification": "VALID",
+                    "kind": "INDEX", "duplicates": 0, "rejected": 0, "child_sitemap_count": urls_found,
+                    **fetch_meta,
                 })
                 for child in parsed["child_sitemaps"]:
                     c_loc = child["loc"]
@@ -702,7 +719,7 @@ class SitemapExtractor:
             else:
                 # Process URLs in urlset
                 urls_found = len(parsed["urls"])
-                sitemap_sources.append({
+                src_rec = {
                     "sitemap_url": current_sitemap,
                     "parent_sitemap_url": parent_sitemap,
                     "depth": depth,
@@ -714,8 +731,12 @@ class SitemapExtractor:
                     "child_sitemap_count": 0,
                     "urls_found": urls_found,
                     "error_message": "",
-                    "classification": "VALID"
-                })
+                    "classification": "VALID",
+                    # additive per-sitemap hygiene stats (used by the on-page sitemap audit)
+                    "kind": "URLSET", "duplicates": 0, "rejected": 0, "child_sitemap_count": 0,
+                    **fetch_meta,
+                }
+                sitemap_sources.append(src_rec)
 
                 for item in parsed["urls"]:
                     raw_url = item["loc"]
@@ -723,17 +744,20 @@ class SitemapExtractor:
                     parsed_item = urllib.parse.urlparse(raw_url)
                     if parsed_item.scheme.lower() not in ["http", "https"]:
                         rejected_count += 1
+                        src_rec["rejected"] += 1
                         continue
 
                     # 2. SSRF Check
                     if not URLNormalizer.is_safe_url(raw_url, allow_local=self.allow_local):
                         rejected_count += 1
+                        src_rec["rejected"] += 1
                         continue
 
                     # 3. Normalize & Deduplicate
                     norm_url = URLNormalizer.normalize(raw_url)
                     if norm_url in extracted_urls_map:
                         duplicate_count += 1
+                        src_rec["duplicates"] += 1
                         continue
 
                     # 4. Check Robots.txt policy

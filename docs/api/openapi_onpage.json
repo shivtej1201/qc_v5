@@ -1,0 +1,2644 @@
+{
+ "components": {
+  "schemas": {
+   "Body_import_sitemaps_api_sitemaps_import_post": {
+    "properties": {
+     "file": {
+      "anyOf": [
+       {
+        "contentMediaType": "application/octet-stream",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "File"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": "Sitemap Import",
+      "title": "Title"
+     },
+     "urls": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Urls"
+     }
+    },
+    "title": "Body_import_sitemaps_api_sitemaps_import_post",
+    "type": "object"
+   },
+   "Body_onpage_start_upload_api_on_page_audits_upload_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "name": {
+      "default": "On-page audit",
+      "title": "Name",
+      "type": "string"
+     },
+     "preset": {
+      "default": "conservative",
+      "title": "Preset",
+      "type": "string"
+     },
+     "primary_domain": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Domain"
+     },
+     "target_rps": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target Rps"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_onpage_start_upload_api_on_page_audits_upload_post",
+    "type": "object"
+   },
+   "Body_upload_file_api_upload_post": {
+    "properties": {
+     "file": {
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "type": "string"
+     },
+     "mode": {
+      "default": "url_status",
+      "title": "Mode",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "title": "Body_upload_file_api_upload_post",
+    "type": "object"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "title": "Detail",
+      "type": "array"
+     }
+    },
+    "title": "HTTPValidationError",
+    "type": "object"
+   },
+   "OnPageIssueStatus": {
+    "properties": {
+     "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "title": "OnPageIssueStatus",
+    "type": "object"
+   },
+   "OnPageSitemapDiscoverRequest": {
+    "properties": {
+     "inputs": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Inputs",
+      "type": "array"
+     },
+     "max_urls": {
+      "default": 50000,
+      "title": "Max Urls",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "inputs"
+    ],
+    "title": "OnPageSitemapDiscoverRequest",
+    "type": "object"
+   },
+   "OnPageSitemapProfile": {
+    "properties": {
+     "exclude": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exclude"
+     },
+     "include": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Include"
+     },
+     "inputs": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Inputs",
+      "type": "array"
+     },
+     "max_pages": {
+      "default": 0,
+      "title": "Max Pages",
+      "type": "integer"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "overrides": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Overrides"
+     },
+     "preset": {
+      "default": "conservative",
+      "title": "Preset",
+      "type": "string"
+     },
+     "primary_domain": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Domain"
+     },
+     "selected_sitemaps": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Selected Sitemaps"
+     }
+    },
+    "required": [
+     "name",
+     "inputs"
+    ],
+    "title": "OnPageSitemapProfile",
+    "type": "object"
+   },
+   "OnPageSitemapSelection": {
+    "properties": {
+     "exclude": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exclude"
+     },
+     "import_id": {
+      "title": "Import Id",
+      "type": "string"
+     },
+     "include": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Include"
+     },
+     "include_robots_blocked": {
+      "default": false,
+      "title": "Include Robots Blocked",
+      "type": "boolean"
+     },
+     "max_pages": {
+      "default": 0,
+      "title": "Max Pages",
+      "type": "integer"
+     },
+     "selected_sitemaps": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Selected Sitemaps"
+     }
+    },
+    "required": [
+     "import_id"
+    ],
+    "title": "OnPageSitemapSelection",
+    "type": "object"
+   },
+   "OnPageStartRequest": {
+    "properties": {
+     "name": {
+      "default": "On-page audit",
+      "title": "Name",
+      "type": "string"
+     },
+     "overrides": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Overrides"
+     },
+     "preset": {
+      "default": "conservative",
+      "title": "Preset",
+      "type": "string"
+     },
+     "primary_domain": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Domain"
+     },
+     "sitemap": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/OnPageSitemapSelection"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "sitemap_import_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sitemap Import Id"
+     },
+     "urls": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Urls"
+     }
+    },
+    "title": "OnPageStartRequest",
+    "type": "object"
+   },
+   "RemediationStatusUpdate": {
+    "properties": {
+     "review_notes": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Review Notes"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "title": "RemediationStatusUpdate",
+    "type": "object"
+   },
+   "SitemapCrawlRequest": {
+    "properties": {
+     "force_recheck": {
+      "default": false,
+      "title": "Force Recheck",
+      "type": "boolean"
+     },
+     "mode": {
+      "default": "link_audit",
+      "title": "Mode",
+      "type": "string"
+     },
+     "selected_only": {
+      "default": true,
+      "title": "Selected Only",
+      "type": "boolean"
+     }
+    },
+    "title": "SitemapCrawlRequest",
+    "type": "object"
+   },
+   "SitemapSelectAllRequest": {
+    "properties": {
+     "eligible_only": {
+      "default": true,
+      "title": "Eligible Only",
+      "type": "boolean"
+     },
+     "selected": {
+      "default": true,
+      "title": "Selected",
+      "type": "boolean"
+     }
+    },
+    "title": "SitemapSelectAllRequest",
+    "type": "object"
+   },
+   "SitemapUrlSelectRequest": {
+    "properties": {
+     "selected": {
+      "default": true,
+      "title": "Selected",
+      "type": "boolean"
+     },
+     "url_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "title": "Url Ids",
+      "type": "array"
+     }
+    },
+    "required": [
+     "url_ids"
+    ],
+    "title": "SitemapUrlSelectRequest",
+    "type": "object"
+   },
+   "StartJobsRequest": {
+    "properties": {
+     "filepath": {
+      "title": "Filepath",
+      "type": "string"
+     },
+     "force_recheck": {
+      "default": false,
+      "title": "Force Recheck",
+      "type": "boolean"
+     },
+     "mode": {
+      "title": "Mode",
+      "type": "string"
+     },
+     "sheets": {
+      "items": {},
+      "title": "Sheets",
+      "type": "array"
+     }
+    },
+    "required": [
+     "filepath",
+     "mode",
+     "sheets"
+    ],
+    "title": "StartJobsRequest",
+    "type": "object"
+   },
+   "ValidationError": {
+    "properties": {
+     "ctx": {
+      "title": "Context",
+      "type": "object"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "title": "Location",
+      "type": "array"
+     },
+     "msg": {
+      "title": "Message",
+      "type": "string"
+     },
+     "type": {
+      "title": "Error Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError",
+    "type": "object"
+   }
+  }
+ },
+ "info": {
+  "title": "QC V5 / CrawlPulse on-page audit API",
+  "version": "1.0.0-frozen"
+ },
+ "openapi": "3.1.0",
+ "paths": {
+  "/api/jobs/{job_id}/remediations": {
+   "get": {
+    "operationId": "get_job_remediations_api_jobs__job_id__remediations_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "page",
+      "required": false,
+      "schema": {
+       "default": 1,
+       "title": "Page",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "page_size",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "title": "Page Size",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "severity",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Severity"
+      }
+     },
+     {
+      "in": "query",
+      "name": "priority",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Priority"
+      }
+     },
+     {
+      "in": "query",
+      "name": "category",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Category"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "in": "query",
+      "name": "q",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort_by",
+      "required": false,
+      "schema": {
+       "default": "priority_score",
+       "title": "Sort By",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort_dir",
+      "required": false,
+      "schema": {
+       "default": "desc",
+       "title": "Sort Dir",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Job Remediations"
+   }
+  },
+  "/api/jobs/{job_id}/remediations/export": {
+   "get": {
+    "operationId": "export_job_remediations_api_jobs__job_id__remediations_export_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "format",
+      "required": false,
+      "schema": {
+       "default": "csv",
+       "title": "Format",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Export Job Remediations"
+   }
+  },
+  "/api/jobs/{job_id}/remediations/generate": {
+   "post": {
+    "operationId": "generate_job_remediations_api_jobs__job_id__remediations_generate_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Generate Job Remediations"
+   }
+  },
+  "/api/jobs/{job_id}/remediations/summary": {
+   "get": {
+    "operationId": "get_job_remediation_summary_api_jobs__job_id__remediations_summary_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Job Remediation Summary"
+   }
+  },
+  "/api/jobs/{job_id}/remediations/{remediation_id}": {
+   "get": {
+    "operationId": "get_job_remediation_detail_api_jobs__job_id__remediations__remediation_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "remediation_id",
+      "required": true,
+      "schema": {
+       "title": "Remediation Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Get Job Remediation Detail"
+   },
+   "patch": {
+    "operationId": "update_job_remediation_api_jobs__job_id__remediations__remediation_id__patch",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "remediation_id",
+      "required": true,
+      "schema": {
+       "title": "Remediation Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RemediationStatusUpdate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Update Job Remediation"
+   }
+  },
+  "/api/on-page/audits": {
+   "get": {
+    "operationId": "onpage_list_api_on_page_audits_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Onpage List"
+   },
+   "post": {
+    "operationId": "onpage_start_api_on_page_audits_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OnPageStartRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Start"
+   }
+  },
+  "/api/on-page/audits/upload": {
+   "post": {
+    "operationId": "onpage_start_upload_api_on_page_audits_upload_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_onpage_start_upload_api_on_page_audits_upload_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Start Upload"
+   }
+  },
+  "/api/on-page/audits/{job_id}": {
+   "get": {
+    "operationId": "onpage_detail_api_on_page_audits__job_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Detail"
+   }
+  },
+  "/api/on-page/audits/{job_id}/cancel": {
+   "post": {
+    "operationId": "onpage_cancel_api_on_page_audits__job_id__cancel_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Cancel"
+   }
+  },
+  "/api/on-page/audits/{job_id}/files/{name}": {
+   "get": {
+    "operationId": "onpage_file_api_on_page_audits__job_id__files__name__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "name",
+      "required": true,
+      "schema": {
+       "title": "Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage File"
+   }
+  },
+  "/api/on-page/audits/{job_id}/images": {
+   "get": {
+    "operationId": "onpage_images_api_on_page_audits__job_id__images_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "internal_external",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Internal External"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status_bucket",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status Bucket"
+      }
+     },
+     {
+      "in": "query",
+      "name": "alt",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Alt"
+      }
+     },
+     {
+      "in": "query",
+      "name": "source_page",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source Page"
+      }
+     },
+     {
+      "in": "query",
+      "name": "q",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Sort",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "order",
+      "required": false,
+      "schema": {
+       "default": "asc",
+       "title": "Order",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Images"
+   }
+  },
+  "/api/on-page/audits/{job_id}/insights": {
+   "get": {
+    "operationId": "onpage_insights_api_on_page_audits__job_id__insights_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Insights"
+   }
+  },
+  "/api/on-page/audits/{job_id}/issues": {
+   "get": {
+    "operationId": "onpage_issues_api_on_page_audits__job_id__issues_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "severity",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Severity"
+      }
+     },
+     {
+      "in": "query",
+      "name": "issue_type",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Issue Type"
+      }
+     },
+     {
+      "in": "query",
+      "name": "category",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Category"
+      }
+     },
+     {
+      "in": "query",
+      "name": "q",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "in": "query",
+      "name": "page_url",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Page Url"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Sort",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "order",
+      "required": false,
+      "schema": {
+       "default": "asc",
+       "title": "Order",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Issues"
+   }
+  },
+  "/api/on-page/audits/{job_id}/issues/overview": {
+   "get": {
+    "operationId": "onpage_issue_overview_api_on_page_audits__job_id__issues_overview_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Issue Overview"
+   }
+  },
+  "/api/on-page/audits/{job_id}/issues/{issue_key}": {
+   "get": {
+    "operationId": "onpage_issue_detail_api_on_page_audits__job_id__issues__issue_key__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "issue_key",
+      "required": true,
+      "schema": {
+       "title": "Issue Key",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Issue Detail"
+   }
+  },
+  "/api/on-page/audits/{job_id}/issues/{issue_key}/status": {
+   "patch": {
+    "operationId": "onpage_issue_status_api_on_page_audits__job_id__issues__issue_key__status_patch",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "issue_key",
+      "required": true,
+      "schema": {
+       "title": "Issue Key",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OnPageIssueStatus"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Issue Status"
+   }
+  },
+  "/api/on-page/audits/{job_id}/links": {
+   "get": {
+    "operationId": "onpage_links_api_on_page_audits__job_id__links_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "scope",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Scope"
+      }
+     },
+     {
+      "in": "query",
+      "name": "url_type",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Url Type"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status_bucket",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status Bucket"
+      }
+     },
+     {
+      "in": "query",
+      "name": "source_page",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source Page"
+      }
+     },
+     {
+      "in": "query",
+      "name": "q",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Sort",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "order",
+      "required": false,
+      "schema": {
+       "default": "asc",
+       "title": "Order",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Links"
+   }
+  },
+  "/api/on-page/audits/{job_id}/package": {
+   "get": {
+    "operationId": "onpage_package_api_on_page_audits__job_id__package_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Package"
+   }
+  },
+  "/api/on-page/audits/{job_id}/pages": {
+   "get": {
+    "operationId": "onpage_pages_api_on_page_audits__job_id__pages_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 25,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Pages"
+   }
+  },
+  "/api/on-page/audits/{job_id}/pause": {
+   "post": {
+    "operationId": "onpage_pause_api_on_page_audits__job_id__pause_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Pause"
+   }
+  },
+  "/api/on-page/audits/{job_id}/progress": {
+   "get": {
+    "operationId": "onpage_progress_api_on_page_audits__job_id__progress_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Progress"
+   }
+  },
+  "/api/on-page/audits/{job_id}/resume": {
+   "post": {
+    "operationId": "onpage_resume_api_on_page_audits__job_id__resume_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Resume"
+   }
+  },
+  "/api/on-page/audits/{job_id}/score": {
+   "get": {
+    "operationId": "onpage_score_api_on_page_audits__job_id__score_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Score"
+   }
+  },
+  "/api/on-page/audits/{job_id}/seo": {
+   "get": {
+    "operationId": "onpage_seo_api_on_page_audits__job_id__seo_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Seo"
+   }
+  },
+  "/api/on-page/audits/{job_id}/stop": {
+   "post": {
+    "operationId": "onpage_stop_api_on_page_audits__job_id__stop_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Stop"
+   }
+  },
+  "/api/on-page/audits/{job_id}/url-detail": {
+   "get": {
+    "operationId": "onpage_url_detail_api_on_page_audits__job_id__url_detail_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "url",
+      "required": true,
+      "schema": {
+       "title": "Url",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Url Detail"
+   }
+  },
+  "/api/on-page/audits/{job_id}/urls": {
+   "get": {
+    "operationId": "onpage_urls_api_on_page_audits__job_id__urls_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "job_id",
+      "required": true,
+      "schema": {
+       "title": "Job Id",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status_bucket",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status Bucket"
+      }
+     },
+     {
+      "in": "query",
+      "name": "crawl_state",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Crawl State"
+      }
+     },
+     {
+      "in": "query",
+      "name": "q",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Sort",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "order",
+      "required": false,
+      "schema": {
+       "default": "asc",
+       "title": "Order",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "title": "Offset",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Urls"
+   }
+  },
+  "/api/on-page/estimate": {
+   "get": {
+    "operationId": "onpage_estimate_api_on_page_estimate_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "pages",
+      "required": true,
+      "schema": {
+       "title": "Pages",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "rps",
+      "required": true,
+      "schema": {
+       "title": "Rps",
+       "type": "number"
+      }
+     },
+     {
+      "in": "query",
+      "name": "images_on_primary",
+      "required": false,
+      "schema": {
+       "default": false,
+       "title": "Images On Primary",
+       "type": "boolean"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Estimate"
+   }
+  },
+  "/api/on-page/presets": {
+   "get": {
+    "operationId": "onpage_presets_api_on_page_presets_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Onpage Presets"
+   }
+  },
+  "/api/on-page/sitemap-profiles": {
+   "get": {
+    "operationId": "onpage_profiles_api_on_page_sitemap_profiles_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Onpage Profiles"
+   },
+   "post": {
+    "operationId": "onpage_profile_create_api_on_page_sitemap_profiles_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OnPageSitemapProfile"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Profile Create"
+   }
+  },
+  "/api/on-page/sitemap-profiles/{profile_id}": {
+   "delete": {
+    "operationId": "onpage_profile_delete_api_on_page_sitemap_profiles__profile_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "profile_id",
+      "required": true,
+      "schema": {
+       "title": "Profile Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Profile Delete"
+   },
+   "put": {
+    "operationId": "onpage_profile_update_api_on_page_sitemap_profiles__profile_id__put",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "profile_id",
+      "required": true,
+      "schema": {
+       "title": "Profile Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OnPageSitemapProfile"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Profile Update"
+   }
+  },
+  "/api/on-page/sitemap-profiles/{profile_id}/run": {
+   "post": {
+    "description": "Re-discover the profile's sitemaps and launch an audit with its saved selection.",
+    "operationId": "onpage_profile_run_api_on_page_sitemap_profiles__profile_id__run_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "profile_id",
+      "required": true,
+      "schema": {
+       "title": "Profile Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Profile Run"
+   }
+  },
+  "/api/on-page/sitemaps/discover": {
+   "post": {
+    "description": "Fetch + parse sitemaps (from sitemap URLs, robots.txt or a domain) into a reusable import snapshot.",
+    "operationId": "onpage_sitemap_discover_api_on_page_sitemaps_discover_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OnPageSitemapDiscoverRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Sitemap Discover"
+   }
+  },
+  "/api/on-page/sitemaps/{import_id}": {
+   "get": {
+    "operationId": "onpage_sitemap_import_api_on_page_sitemaps__import_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "import_id",
+      "required": true,
+      "schema": {
+       "title": "Import Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Sitemap Import"
+   }
+  },
+  "/api/on-page/sitemaps/{import_id}/preview": {
+   "post": {
+    "operationId": "onpage_sitemap_preview_api_on_page_sitemaps__import_id__preview_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "import_id",
+      "required": true,
+      "schema": {
+       "title": "Import Id",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/OnPageSitemapSelection"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Onpage Sitemap Preview"
+   }
+  }
+ }
+}
