@@ -1,4 +1,7 @@
-# User Guide: Link & Image Auditor Platform
+# User Guide: Link & Image Auditor Platform (classic console)
+
+> For the Command Center (`/dashboard/`) on-page audit, see [docs/guides/USER_GUIDE.md](docs/guides/USER_GUIDE.md) and the
+> [SOP](docs/guides/SOP_ON_PAGE_AUDIT.md).
 
 Welcome to the Next-Generation SEO Link and Image Auditor! This platform processes large URL files using background queues and bounded-memory ingestion. Jobs can contain up to 1,000,000 URL records by default.
 

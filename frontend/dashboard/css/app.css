@@ -99,7 +99,7 @@ a:hover { text-decoration: underline; }
 .st-PAUSED, .st-CREATED, .st-OPEN { color: var(--warn); }
 .st-CANCELLED, .st-DISMISSED, .st-NEEDS_REVIEW { color: var(--text-3); }
 .st-VERIFIED, .st-RESOLVED { color: var(--ok); }
-.sev { font-weight: 700; font-size: var(--fs-xs); padding: 2px 8px; border-radius: 6px; letter-spacing: 0.4px; }
+.sev { font-weight: 700; font-size: var(--fs-xs); padding: 2px 8px; border-radius: 6px; letter-spacing: 0.4px; white-space: nowrap; display: inline-block; }
 .sev-HIGH { color: #fff; background: var(--sev-high); }
 .sev-MEDIUM { color: #1a1300; background: var(--sev-medium); }
 .sev-LOW { color: #03141d; background: var(--sev-low); }

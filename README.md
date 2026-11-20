@@ -100,7 +100,9 @@ pages. Measure the real ceiling from your network with `bench/live_edge_matrix.p
 - [Backend audit and gap analysis](docs/audit/BACKEND_AUDIT_AND_GAPS.md)
 - [Design system](docs/design/DESIGN_SYSTEM.md): tokens, components, motion, accessibility
 - [10K performance and accuracy report](docs/performance/ON_PAGE_10K_URL_IMAGE_AUDIT.md)
-- [User guide](USER_GUIDE.md) (classic console)
+- [User guide — Command Center](docs/guides/USER_GUIDE.md): creating audits, live monitoring, explorers, issues, remediation, reports
+- [SOP — running an on-page audit](docs/guides/SOP_ON_PAGE_AUDIT.md): pre-flight rate check, procedure, validation, incidents, checklists
+- [Classic console user guide](USER_GUIDE.md)
 
 ## Project layout
 

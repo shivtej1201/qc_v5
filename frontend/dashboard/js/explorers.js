@@ -205,9 +205,10 @@ export function issuesView(id, query) {
 export async function openIssue(id, key, onChange) {
   const it = await api.issueDetail(id, key);
   const back = h("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "issue-title" });
-  const close = () => { back.remove(); document.removeEventListener("keydown", esc); };
+  const close = () => { back.remove(); document.removeEventListener("keydown", esc); window.removeEventListener("hashchange", close); };
   const esc = (e) => { if (e.key === "Escape") close(); };
   document.addEventListener("keydown", esc);
+  window.addEventListener("hashchange", close);   // Back button / navigation never leaves a dialog over the next view
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
   const statusSel = sel("Issue status", ISSUE_STATUSES.map((s) => [s, s]), it.status, () => {});
   const note = h("input", { type: "text", placeholder: "Note (ticket, owner…)", "aria-label": "Status note", value: it.status_note || "" });

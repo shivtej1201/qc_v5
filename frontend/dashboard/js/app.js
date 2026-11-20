@@ -528,9 +528,10 @@ async function openWizard(opts = {}) {
       exclude: (prof?.exclude || []).join("\n"), maxPages: prof?.max_pages || 0, preview: null, busy: false, error: "",
       save: !!prof, profileName: prof?.name || "", profileId: prof?.id || null, wanted: prof?.selected_sitemaps || [] } };
   const back = h("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "wiz-title" });
-  const close = () => { back.remove(); document.removeEventListener("keydown", esc); };
+  const close = () => { back.remove(); document.removeEventListener("keydown", esc); window.removeEventListener("hashchange", close); };
   const esc = (e) => { if (e.key === "Escape") close(); };
   document.addEventListener("keydown", esc);
+  window.addEventListener("hashchange", close);   // Back button / navigation never leaves a dialog over the next view
   back.addEventListener("click", (e) => { if (e.target === back) close(); });
   const modal = h("div", { class: "modal modal-wide" });
   back.append(modal);
