@@ -58,7 +58,7 @@ reverse proxy).
   | 10,000 | 1 GB |
   | 50,000 | 4 GB |
   | 150,000 | 12 GB |
-  | 300,000 | 30 GB (a 300K report build ran out of space with ~28 GB free; reserve more) |
+  | 300,000 | 30 GB (measured peak ~22 GB with the issue-spool fix; before it, a 300K report build filled ~28 GB) |
 
 * Network route to the target site that is not shared with other heavy crawlers (they share the WAF budget).
 
@@ -108,7 +108,7 @@ python bench/live_edge_matrix.py --urls sample_200_urls.txt --primary-domain baj
 | 14 req/s | Max tested | ~13 min |
 | ≥ 18 req/s | Enterprise 150K (16, adaptive to 18) | ~11 min (measured) |
 
-300,000 pages in ≤ 4 h needs the edge to accept **≥ 23 req/s** sustained.
+300,000 pages in ≤ 4 h needs the edge to accept **≥ 23 req/s** sustained (measured at 30 req/s on a simulated edge: 3 h 22 min end to end).
 
 ## 7. Procedure — run an audit from the Command Center
 

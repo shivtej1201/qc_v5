@@ -73,8 +73,10 @@ target's edge tolerates:
 | 16 req/s, max 18 (Enterprise 150K preset, simulated edge without WAF) | **11.25 min measured end to end** (crawl 10.8 min + reports/ZIP 24 s) |
 | 16 req/s preset on the simulated Akamai model (blocks > 15 req/s) | crawl 13.0 min measured (one WAF cooldown, rate adapted down to ~13.8 req/s); its report build ran before the report-speed fix (538 s), which now takes ~24 s → ~13.5 min |
 
-300,000 pages need ~318K primary requests: **≤ 4 h requires the edge to sustain ≥ 23 req/s** (see the performance
-report for the measured 300K run).
+300,000 pages need ~318K primary requests: **≤ 4 h requires the edge to sustain ≥ 23 req/s**. Measured on the
+simulated edge at 30 req/s: **300K pages, complete pipeline, 3 h 21 min 57 s** (crawl 3 h 01 min 32 s + reports/ZIP
+20 min 25 s; trust gate 35/35 PASS). A 300K audit needs ≥ 30 GB of free disk. Details:
+`docs/audit/FINAL_VALIDATION_REPORT.md`.
 
 Images on a CDN with its own budget run in parallel; images under the same rate-limited domain add ~70 min per 10K
 pages. Measure the real ceiling from your network with `bench/live_edge_matrix.py` before raising rates.

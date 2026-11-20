@@ -270,3 +270,22 @@ block in the Summary sheet.
 
 Tests: **112 passed, 17 failed** (the same 17 pre-existing environment failures as the untouched baseline);
 crash-recovery, realtime 8/8, SSRF, large-upload scripts PASS.
+
+## H. 300K pages in ≤ 4 h (measured, simulated edge without WAF)
+
+| Run | Crawl | Reports / ZIP | Total | Result |
+|---|---|---|---|---|
+| 20K, before (one shared connection pool) | 1,271.4 s (15.7 pages/s) | 64.7 s | — | CPU-bound |
+| 20K, per-host sharded pools (`http_pool.py`) | 718.3 s (27.8 pages/s, 29.98 req/s); repeat 718.6 s | 63.3 s | — | capped by the 30 req/s budget |
+| 300K B3, 25 req/s, old pool | ~4 h 40 min (incl. container restart + resume) | failed (disk full) | — | FAIL |
+| **300K B4, 30 req/s, sharded pools** | **10,892 s** (27.5 pages/s, 29.6 primary req/s) | **1,224.7 s** (CSVs 812 s, ZIP 55 s, 431 MB) | **12,116.7 s = 3 h 21 min 57 s** | **PASS**, trust gate 35/35 |
+
+B4: 300,000/300,000 pages, 0 failed, 0 WAF events, 0 timeouts, 12 network errors (retried); 11,099,538 link and
+7,509,093 image relationships; 318,026 unique URLs and 1,809,108 unique images validated once each; 2,156,380 issues;
+health score 53.55. B4's first packaging attempt filled the disk: issues committed on the connection streaming the
+CSVs kept SQLite from resetting its WAL (9.6 GB in < 2 min). Issues now spool to a TEMP table and are published in
+one transaction (`issue_store.IssueSink`); the package above was rebuilt from the kept crawl DB with that fix, so the
+total is the engine-recorded crawl time plus that packaging run. Raw numbers: `bench/results/b4_300k_30rps_no_waf.json`.
+
+The real site's edge decides the rate: at ~14 req/s (the simulated Akamai model) 300K pages take ~6.3 h. Measure
+first with `bench/live_edge_matrix.py`.

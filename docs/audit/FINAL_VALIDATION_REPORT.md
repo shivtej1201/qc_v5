@@ -35,12 +35,30 @@ The Watermelon theme was not added (as instructed).
 |---|---|---|---|
 | 10K, Enterprise 150K preset (16/18 req/s, 35/35/50), simulated edge without WAF | 15–20 min, complete pipeline | **11.25 min** (crawl 650.5 s + reports/ZIP 24.4 s); 16.52 req/s avg, 18 peak (1 s); p95 latency 354 ms; CPU 39 %; RSS 226 MB | PASS (simulated) |
 | 10K, same preset, simulated Akamai model (blocks > 15 req/s / > 32 in flight) | — | crawl 13.0 min: 1 WAF cooldown, adaptive step-down 16 → 13.6, settled ~13.8 req/s; 0 failures | preset exceeds the model's WAF limit; engine stayed safe |
-| 300K | ≤ 4 h, complete pipeline | {{300K}} | {{300K_STATUS}} |
+| 300K (B4), 30 req/s (max 30), 40/35/50, simulated edge without WAF | ≤ 4 h, complete pipeline | **3 h 21 min 57 s** = crawl 10,892 s (27.5 pages/s, 29.6 primary req/s, 195 req/s total incl. images) + reports/ZIP 1,224.7 s (CSVs 812 s, ZIP 55 s, 431 MB); 300,000/300,000 pages, 0 failed, 0 WAF, 0 timeouts, 12 network errors (retried); 11.1M link + 7.5M image relationships, 318K + 1.81M unique URLs validated once; 2,156,380 issues; trust gate 35/35 | PASS (simulated; crawl and packaging measured in two processes, see below) |
+| 300K (B3), 25 req/s, before the connection-pool fix | ≤ 4 h | crawl ~4 h 40 min (3 h 45 min, container restart, ~55 min resumed from checkpoint); report build failed on a full disk | FAIL |
 | Real edge (bajajfinserv.in) | — | — | NOT VERIFIED (not reachable from this environment) |
 
 Duration is set by the rate the edge allows: ~1.06 primary requests per page, so 300K pages need ≥ 23 req/s sustained
 for ≤ 4 h; at the simulated Akamai model's ~14 req/s it would take ~6.3 h. 50K/100K/150K/200K profiles were not run
 separately (time); the 10K and 300K runs bracket them and every component scales linearly (see package timing).
+
+### What it took to reach 300K in ≤ 4 h
+
+* **Crawler CPU (fixed).** py-spy on a 20K run showed ~75 % of the event-loop thread inside httpcore's connection
+  pool, which re-checks every pooled connection (socket probe + O(n²) idle count) on each request. One shared pool
+  for the site, the image CDN and every external host made that cost grow with total connections. `http_pool.py`
+  now gives each host its own pool, split into round-robin shards of ≤ 8 keep-alive connections. 20K pages, same
+  settings, identical row counts: crawl 1,271.4 s → 718.3 s (15.7 → 27.8 pages/s; repeat run 718.6 s); the run is
+  now capped by the 30 req/s budget, not the CPU.
+* **Disk during packaging (fixed).** Issues found while the packager streams CSV rows were committed in batches on
+  the connection holding that long read, so SQLite could never reset its WAL; at 1.6M issues it reached 9.6 GB in
+  under two minutes and filled the disk (B4's first packaging attempt; the crawl DB was intact). Issues are now
+  spooled to a TEMP table and published in one transaction. The B4 package above was rebuilt from the kept crawl
+  DB with that fix, so the total adds the crawl time the engine recorded to a separate packaging run; the failed
+  first attempt (~14 min) is not counted.
+* **Disk sizing.** The audit's own peak for 300K was ~22 GB: crawl DB 11.8 GB + 8.8 GB of CSVs + 0.4 GB ZIP +
+  ≤ 1.1 GB WAL (~75 KB per page). Budget ≥ 30 GB free for a 300K audit.
 
 ## Data quality (10K benchmark, B2)
 
@@ -78,7 +96,7 @@ separately (time); the 10K and 300K runs bracket them and every component scales
 | Playwright E2E (`test_e2e_platform_ui.py`, `test_dashboard_ui.py`) | PASS |
 | Security (`test_security_validation.py`, 21 tests) | PASS |
 | Full regression | 149 passed, 17 failed — the 17 are the pre-existing environment-only failures (no public DNS; async scripts pytest cannot collect); identical list before and after |
-| Performance | 10K PASS (simulated); 300K {{300K_STATUS}} |
+| Performance | 10K PASS (simulated); 300K PASS (simulated, 3 h 22 min) |
 
 ## Remaining risks
 
