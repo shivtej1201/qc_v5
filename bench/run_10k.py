@@ -54,11 +54,14 @@ def main():
     p.add_argument("--keep-dir", default="", help="copy the unzipped CSV folder here")
     p.add_argument("--out", required=True)
     p.add_argument("--keep-db", default="", help="copy the audit SQLite DB here (profiling / re-packaging)")
+    p.add_argument("--work-dir", default="", help="reuse this work dir (resume an interrupted run from its checkpoint DB)")
     p.add_argument("--no-waf", action="store_true", help="no Akamai model on the primary host (engine capacity test)")
     a = p.parse_args()
     a.out = os.path.abspath(a.out)
 
-    work = tempfile.mkdtemp(prefix="qc_10k_")
+    work = os.path.abspath(a.work_dir) if a.work_dir else tempfile.mkdtemp(prefix="qc_10k_")
+    os.makedirs(work, exist_ok=True)
+    resumed = os.path.exists(os.path.join(work, "audit.db"))
     sim = subprocess.Popen([sys.executable, os.path.join(HERE, "sim_edge.py"), "--sources", str(a.sources),
                             "--port", str(a.port), "--latency-ms", str(a.latency_ms), "--images",
                             "--cdn-latency-ms", str(a.cdn_latency_ms), "--waf-rps", str(0 if a.no_waf else a.waf_rps),
@@ -69,7 +72,8 @@ def main():
             wait_port(h, a.port)
         base = f"http://127.0.0.1:{a.port}"
         urls = os.path.join(work, "sitemap_urls.txt")
-        with open(urls, "w") as f:
+        if not os.path.exists(urls):
+          with open(urls, "w") as f:
             f.write("\n".join(f"{base}/p/{i}" for i in range(a.sources)))
         os.chdir(ROOT)
         import run_on_page_audit as cli
@@ -88,7 +92,7 @@ def main():
         total = time.time() - t0
         sim_stats = json.loads(urllib.request.urlopen(f"{base}/__stats", timeout=10).read())
         out = {
-            "config": vars(a), "total_seconds_incl_package": round(total, 1),
+            "config": vars(a), "resumed_from_checkpoint": resumed, "total_seconds_incl_package": round(total, 1),
             "crawl_seconds": res["crawl_seconds"], "package_seconds": res.get("package_seconds"),
             "final_qc_status": res.get("final_qc_status"), "performance": res["performance"],
             "stats": res["stats"], "package": res.get("package"), "server": sim_stats,
