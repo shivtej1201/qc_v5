@@ -29,11 +29,6 @@ a:hover { text-decoration: underline; }
   background: conic-gradient(from 210deg, var(--brand-500), var(--accent-500), var(--brand-500));
   box-shadow: var(--glow); color: #04121a; font-weight: 900; font-size: 14px;
 }
-[data-theme="watermelon"] .brand-mark {
-  background: linear-gradient(135deg, #ff2a5f 0%, #00e599 100%);
-  box-shadow: 0 0 16px rgba(255, 42, 95, 0.55), 0 0 10px rgba(0, 229, 153, 0.35);
-  color: #ffffff;
-}
 .brand small { display: block; font-weight: 500; color: var(--text-3); font-size: var(--fs-xs); }
 .nav { display: flex; flex-direction: column; gap: 4px; }
 .nav a {
@@ -42,7 +37,6 @@ a:hover { text-decoration: underline; }
 }
 .nav a:hover { background: rgba(148, 163, 184, 0.08); color: var(--text); text-decoration: none; }
 .nav a[aria-current="page"] { background: rgba(34, 211, 238, 0.12); color: var(--text); box-shadow: inset 2px 0 0 var(--brand-500); }
-[data-theme="watermelon"] .nav a[aria-current="page"] { background: rgba(255, 42, 95, 0.14); color: #f0fdf4; box-shadow: inset 3px 0 0 var(--brand-500); }
 .nav svg { width: 18px; height: 18px; flex: none; }
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--s-2); font-size: var(--fs-xs); color: var(--text-3); }
 
@@ -63,8 +57,6 @@ a:hover { text-decoration: underline; }
 .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 .btn-primary { background: linear-gradient(135deg, var(--brand-500), var(--accent-600)); color: #04121a; border: 0; box-shadow: var(--glow); }
 .btn-primary:hover { filter: brightness(1.08); background: linear-gradient(135deg, var(--brand-500), var(--accent-600)); }
-[data-theme="watermelon"] .btn-primary { background: linear-gradient(135deg, #ff2a5f 0%, #ff5c85 50%, #00e599 100%); color: #ffffff; text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
-[data-theme="watermelon"] .btn-primary:hover { filter: brightness(1.12); box-shadow: 0 0 20px rgba(255, 42, 95, 0.6); }
 .btn-danger { border-color: rgba(244, 63, 94, 0.5); color: var(--sev-high); }
 .btn-ghost { background: transparent; border-color: transparent; }
 .btn svg { width: 16px; height: 16px; }

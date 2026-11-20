@@ -26,7 +26,6 @@
             }
         }
     </script>
-    <script src="/dashboard/vendor/gsap.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
         body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -44,48 +43,6 @@
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; }
-
-        /* Watermelon UI Theme */
-        html.watermelon body {
-            background: radial-gradient(1100px 550px at 12% -10%, rgba(255, 42, 95, 0.18), transparent 60%),
-                        radial-gradient(900px 500px at 110% 12%, rgba(0, 229, 153, 0.16), transparent 60%),
-                        #070d18 !important;
-            color: #f0fdf4 !important;
-        }
-        html.watermelon aside {
-            background-color: #0c1626 !important;
-            border-color: rgba(0, 229, 153, 0.18) !important;
-        }
-        html.watermelon header {
-            background-color: #0c1626 !important;
-            border-color: rgba(0, 229, 153, 0.18) !important;
-        }
-        html.watermelon .bg-white,
-        html.watermelon .dark\:bg-slate-900 {
-            background-color: rgba(12, 22, 38, 0.88) !important;
-            border-color: rgba(0, 229, 153, 0.18) !important;
-            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6) !important;
-        }
-        html.watermelon .border-slate-200,
-        html.watermelon .dark\:border-slate-800 {
-            border-color: rgba(0, 229, 153, 0.18) !important;
-        }
-        html.watermelon .tab-btn.active {
-            background-color: rgba(255, 42, 95, 0.2) !important;
-            color: #ff5c85 !important;
-            box-shadow: inset 3px 0 0 #ff2a5f !important;
-            font-weight: 700;
-        }
-        html.watermelon .text-slate-900,
-        html.watermelon .dark\:text-white {
-            color: #f0fdf4 !important;
-        }
-        html.watermelon .text-slate-500,
-        html.watermelon .text-slate-600,
-        html.watermelon .dark\:text-slate-300,
-        html.watermelon .dark\:text-slate-400 {
-            color: #94a3b8 !important;
-        }
     </style>
 </head>
 <body class="h-full bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 flex flex-col md:flex-row overflow-hidden transition-colors duration-200">
@@ -114,11 +71,10 @@
 
         <!-- Navigation Links -->
         <nav id="nav-links" class="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar">
-            <button onclick="switchView('command-center')" id="nav-command-center" class="tab-btn w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/40 transition">
-                <svg class="w-4 h-4 shrink-0 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 0v18m8-13.5L12 12 4 7.5"></path></svg>
-                <span>Command Center (150K)</span>
-                <span class="ml-auto text-[10px] font-black px-1.5 py-0.5 rounded bg-rose-500 text-white shadow-sm">150K</span>
-            </button>
+            <a href="/dashboard/" id="nav-command-center" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950/40 hover:bg-cyan-100 dark:hover:bg-cyan-900/40 transition">
+                <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 0v18m8-13.5L12 12 4 7.5"></path></svg>
+                <span>Command Center (on-page audits)</span>
+            </a>
             <button onclick="switchView('overview')" id="nav-overview" class="tab-btn active w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition">
                 <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
                 <span>Overview Dashboard</span>
@@ -209,10 +165,10 @@
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                 </button>
 
-                <!-- Theme Toggle: Light / Dark / Watermelon -->
-                <button id="theme-toggle-btn" onclick="toggleTheme()" class="px-2.5 py-1.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition flex items-center gap-1.5 text-xs font-bold" title="Toggle theme (Light / Dark / Watermelon)">
-                    <span id="theme-icon">🍉</span>
-                    <span id="theme-name" class="hidden sm:inline">Watermelon</span>
+                <!-- Dark Mode Toggle -->
+                <button id="theme-toggle-btn" onclick="toggleTheme()" class="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition" title="Toggle color scheme">
+                    <svg id="theme-moon" class="w-4 h-4 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                    <svg id="theme-sun" class="w-4 h-4 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
                 </button>
             </div>
         </header>
@@ -221,55 +177,9 @@
         <main class="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
 
             <!-- ============================================================= -->
-            <!-- VIEW 0: INTEGRATED COMMAND CENTER (ON-PAGE 10K / 150K AUDIT) -->
-            <!-- ============================================================= -->
-            <section id="view-command-center" class="hidden space-y-6 max-w-7xl mx-auto">
-                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-rose-500/10 via-pink-500/10 to-emerald-500/10 border border-rose-500/25 backdrop-blur-md">
-                    <div class="flex items-center gap-3.5">
-                        <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-rose-500 to-emerald-400 flex items-center justify-center text-white font-black text-lg shadow-lg shadow-rose-500/30">
-                            QC
-                        </div>
-                        <div>
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <h2 class="text-base font-black text-slate-900 dark:text-white">QC V5 Command Center — High-Throughput On-Page Crawler</h2>
-                                <span class="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-emerald-500 text-white shadow-sm">Live Engine</span>
-                                <span class="px-2.5 py-0.5 text-[10px] font-black rounded-full bg-rose-500 text-white shadow-sm">Enterprise 150K Ready</span>
-                            </div>
-                            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Auditing 10K pages in 12–15 min & 1.5 Lakh URLs in ~2.8 hours · Real-time 3D topology & 14-CSV Streaming Reports</p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-2 shrink-0">
-                        <button onclick="document.getElementById('command-center-frame').contentWindow.location.reload()" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 transition shadow-sm">Reload Frame</button>
-                        <a href="/dashboard/" target="_blank" class="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r from-rose-500 to-pink-600 text-white hover:brightness-110 transition shadow-md shadow-rose-500/20 flex items-center gap-1.5">Open Full Window ↗</a>
-                    </div>
-                </div>
-
-                <!-- Embedded Command Center Frame -->
-                <div class="w-full h-[860px] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-xl bg-slate-950">
-                    <iframe id="command-center-frame" src="/dashboard/" class="w-full h-full border-0"></iframe>
-                </div>
-            </section>
-
-            <!-- ============================================================= -->
             <!-- VIEW 1: OVERVIEW DASHBOARD -->
             <!-- ============================================================= -->
             <section id="view-overview" class="space-y-6 max-w-7xl mx-auto">
-                <!-- Enterprise 150K Crawler Quick Launch Banner -->
-                <div class="p-5 rounded-2xl bg-gradient-to-r from-rose-500/10 via-pink-500/10 to-emerald-500/10 border border-rose-500/20 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <span class="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
-                            <h3 class="text-base font-extrabold text-slate-900 dark:text-white">Enterprise 10K / 150K On-Page Audit Engine</h3>
-                            <span class="px-2 py-0.5 text-[10px] font-black rounded-full bg-rose-500 text-white">NEW</span>
-                        </div>
-                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Crawl 10,000 sitemap pages in 12–15 min or 150,000 pages in ~2.8 hours with 3-level dedup, image audit & 14-CSV streaming reports.</p>
-                    </div>
-                    <button onclick="switchView('command-center')" class="px-5 py-2.5 rounded-xl font-bold text-xs bg-gradient-to-r from-rose-500 to-pink-600 hover:brightness-110 text-white shadow-lg shadow-rose-500/25 transition shrink-0 flex items-center gap-2">
-                        <span>Open Command Center</span>
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
-                    </button>
-                </div>
-
                 <!-- Top Metric Cards -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                     <div class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
@@ -1567,16 +1477,16 @@
         function switchView(viewName) {
             activeView = viewName;
             try { sessionStorage.setItem('activeView', viewName); } catch (e) {}
-            
-            const prevSection = document.querySelector('main > section:not(.hidden)');
+            document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
 
             const targetSection = document.getElementById(`view-${viewName}`);
+            if (targetSection) targetSection.classList.remove('hidden');
+
             const targetNav = document.getElementById(`nav-${viewName}`);
             if (targetNav) targetNav.classList.add('active');
 
             const titleMap = {
-                'command-center': 'Command Center — On-Page 10K/150K Crawler & Image Intelligence',
                 'overview': 'Overview Dashboard',
                 'sitemap-crawl': 'Sitemap to Crawl & 403 Diagnostics',
                 'link-audit': 'Link Audit (20K Records)',
@@ -1588,102 +1498,19 @@
             };
             document.getElementById('view-title').textContent = titleMap[viewName] || 'Auditor';
 
-            if (window.gsap && prevSection && prevSection !== targetSection) {
-                window.gsap.to(prevSection, {
-                    opacity: 0,
-                    y: -10,
-                    duration: 0.16,
-                    ease: 'power2.in',
-                    onComplete: () => {
-                        document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
-                        if (targetSection) {
-                            targetSection.classList.remove('hidden');
-                            window.gsap.fromTo(targetSection, 
-                                { opacity: 0, y: 16 }, 
-                                { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }
-                            );
-                            const cards = targetSection.querySelectorAll('.bg-white, .dark\\:bg-slate-900, .rounded-2xl');
-                            if (cards.length > 0) {
-                                window.gsap.from(cards, {
-                                    opacity: 0,
-                                    y: 12,
-                                    duration: 0.38,
-                                    stagger: 0.035,
-                                    ease: 'power2.out'
-                                });
-                            }
-                        }
-                    }
-                });
-            } else {
-                document.querySelectorAll('main > section').forEach(s => s.classList.add('hidden'));
-                if (targetSection) {
-                    targetSection.classList.remove('hidden');
-                    if (window.gsap) {
-                        window.gsap.fromTo(targetSection, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.32, ease: 'power2.out' });
-                    }
-                }
-            }
-
             if (viewName === 'health') fetchHealth();
             if (viewName === 'overview') fetchOverview();
             if (viewName === 'remediations') loadRemediationsView();
             if (viewName === 'sitemap-crawl') loadSitemapCrawlView();
         }
 
-        function applyTheme(theme) {
-            document.documentElement.classList.remove('dark', 'watermelon');
-            const icon = document.getElementById('theme-icon');
-            const name = document.getElementById('theme-name');
-            if (theme === 'watermelon') {
-                document.documentElement.classList.add('dark', 'watermelon');
-                if (icon) icon.textContent = '🍉';
-                if (name) name.textContent = 'Watermelon';
-            } else if (theme === 'dark') {
-                document.documentElement.classList.add('dark');
-                if (icon) icon.textContent = '🌙';
-                if (name) name.textContent = 'Dark';
-            } else {
-                if (icon) icon.textContent = '☀️';
-                if (name) name.textContent = 'Light';
-            }
-            try { localStorage.setItem('theme', theme); } catch (e) {}
-            if (window.gsap) {
-                window.gsap.fromTo('body', { opacity: 0.94 }, { opacity: 1, duration: 0.3, ease: 'power1.out' });
-            }
-        }
-
         function toggleTheme() {
-            const current = localStorage.getItem('theme') || 'watermelon';
-            const themes = ['watermelon', 'dark', 'light'];
-            const next = themes[(themes.indexOf(current) + 1) % themes.length];
-            applyTheme(next);
-            showToast(`Theme switched to ${next.toUpperCase()}`, 'info');
+            document.documentElement.classList.toggle('dark');
+            const isDark = document.documentElement.classList.contains('dark');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
         }
-
-        // Initialize theme on start
-        const initialTheme = localStorage.getItem('theme') || 'watermelon';
-        applyTheme(initialTheme);
-
-        function gsapAnimateNumber(elId, val) {
-            const el = document.getElementById(elId);
-            if (!el) return;
-            const target = Number(val) || 0;
-            const from = Number(el.dataset.val || el.textContent.replace(/[^0-9.-]/g, '')) || 0;
-            el.dataset.val = target;
-            if (window.gsap && from !== target) {
-                const obj = { num: from };
-                window.gsap.to(obj, {
-                    num: target,
-                    duration: 0.75,
-                    ease: 'power2.out',
-                    onUpdate: () => {
-                        el.textContent = Math.round(obj.num).toLocaleString();
-                    }
-                });
-            } else {
-                el.textContent = target.toLocaleString();
-            }
+        if (localStorage.getItem('theme') === 'dark') {
+            document.documentElement.classList.add('dark');
         }
 
         function showToast(message, type = 'info') {
@@ -1771,10 +1598,10 @@
                 if (!res.ok) return;
                 const data = await res.json();
 
-                gsapAnimateNumber('kpi-active-jobs', (data.running_jobs || 0) + (data.queued_jobs || 0));
-                gsapAnimateNumber('kpi-total-urls', data.total_submitted_urls || 0);
-                gsapAnimateNumber('kpi-unique-dests', data.total_destinations_validated || 0);
-                gsapAnimateNumber('kpi-failures', data.total_non_200 || 0);
+                document.getElementById('kpi-active-jobs').textContent = (data.running_jobs || 0) + (data.queued_jobs || 0);
+                document.getElementById('kpi-total-urls').textContent = (data.total_submitted_urls || 0).toLocaleString();
+                document.getElementById('kpi-unique-dests').textContent = (data.total_destinations_validated || 0).toLocaleString();
+                document.getElementById('kpi-failures').textContent = (data.total_non_200 || 0).toLocaleString();
 
                 const totalVal = data.total_destinations_validated || 0;
                 const okCount = data.total_200_ok || 0;

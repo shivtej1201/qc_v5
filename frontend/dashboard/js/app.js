@@ -52,10 +52,7 @@ function nav(active) {
 }
 
 function shell(active, title, subtitle, actions, content) {
-  const currentTheme = document.documentElement.dataset.theme || "watermelon";
-  const themeTitle = `Theme: ${currentTheme.toUpperCase()} (Click to toggle: Dark / Watermelon / Light)`;
-  const theme = h("button", { class: "btn icon-btn btn-ghost", title: themeTitle, "aria-label": themeTitle, onclick: () => { toggleTheme(); render(); } },
-    currentTheme === "watermelon" ? "🍉" : icon(currentTheme === "light" ? "sun" : "sun"));
+  const theme = h("button", { class: "btn icon-btn btn-ghost", title: "Toggle theme", "aria-label": "Toggle light/dark theme", onclick: toggleTheme }, icon("sun"));
   return h("div", { class: "shell" },
     h("aside", { class: "sidebar" },
       h("div", { class: "brand" }, h("div", { class: "brand-mark", "aria-hidden": "true" }, "QC"),
@@ -69,34 +66,11 @@ function shell(active, title, subtitle, actions, content) {
       content));
 }
 
-function animateViewEntrance() {
-  if (window.gsap && !document.documentElement.classList.contains("refreshing")) {
-    window.gsap.from(".reveal", {
-      opacity: 0,
-      y: 12,
-      duration: 0.45,
-      stagger: 0.04,
-      ease: "power2.out",
-      clearProps: "all"
-    });
-    window.gsap.from(".card.kpi .value", {
-      scale: 0.92,
-      duration: 0.4,
-      ease: "back.out(1.4)"
-    });
-  }
-}
-
 function toggleTheme() {
-  const current = document.documentElement.dataset.theme || "dark";
-  const themes = ["dark", "watermelon", "light"];
-  const next = themes[(themes.indexOf(current) + 1) % themes.length];
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("qc-theme", next); } catch { /* storage may be blocked */ }
+  const cur = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = cur;
+  try { localStorage.setItem("qc-theme", cur); } catch { /* storage may be blocked */ }
   scene?.setTheme();
-  if (window.gsap) {
-    window.gsap.fromTo("body", { opacity: 0.94 }, { opacity: 1, duration: 0.3, ease: "power1.out" });
-  }
 }
 
 function newAuditButton(opts) {
@@ -159,10 +133,10 @@ function heroCard(job, stats) {
     sceneJob = job ? job.job_id : null;
     requestAnimationFrame(() => {
       if (sceneHostEl !== sceneHost) return;           // view changed before the frame
-      const fb = sceneHost.querySelector(".scene-fallback");
       scene = createCrawlCore(sceneHost);
+      const fb = sceneHost.querySelector(".scene-fallback");    // the "Loading…" placeholder, not a WebGL notice
+      if (fb && fb.textContent.startsWith("Loading")) fb.remove();   // WebGL failure adds its own notice
       feedScene(job, stats);
-      if (scene?.ok && fb) fb.remove();
     });
   }
   return card;
@@ -342,7 +316,6 @@ async function viewOverview(token) {
     h("section", { class: "card reveal" }, h("div", { class: "card-head" }, h("h2", {}, "Recent audits"), h("a", { href: "#/audits" }, "View all")),
       auditsTable(audits.slice(0, 6), { compact: true })));
   mount(app, shell("overview", "Command Center", "Live crawl, validation and issue intelligence", newAuditButton(), content));
-  animateViewEntrance();
   schedule(() => render(), audits.some((a) => ACTIVE.has(a.run_state)));
 }
 
@@ -352,7 +325,6 @@ async function viewAudits(token) {
   disposeScene();
   mount(app, shell("audits", "Audits", `${audits.length} audit(s) · one active crawl per domain`, newAuditButton(),
     h("section", { class: "card reveal" }, auditsTable(audits))));
-  animateViewEntrance();
   schedule(() => render(), audits.some((a) => ACTIVE.has(a.run_state)));
 }
 
@@ -438,7 +410,6 @@ async function viewAudit(token, id) {
     h("details", { class: "card" }, h("summary", {}, "Worker log (last lines)"),
       h("pre", { class: "mono dim", style: { whiteSpace: "pre-wrap", fontSize: "var(--fs-xs)" } }, (d.log_tail || []).join("\n"))));
   mount(app, shell("audits", d.name, `${d.job_id} · ${d.primary_domain} · preset ${d.preset}`, actions, content));
-  animateViewEntrance();
   schedule(() => render(), running);
 }
 
@@ -875,7 +846,7 @@ async function render() {
 window.addEventListener("hashchange", () => { issueState.offset = 0; render(); });
 try {
   const saved = localStorage.getItem("qc-theme");
-  if (saved) document.documentElement.dataset.theme = saved;
-  else document.documentElement.dataset.theme = "watermelon";
+  if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;   // ignores retired themes
+  else if (window.matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
 } catch { /* storage may be blocked */ }
 render();
