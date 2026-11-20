@@ -1,0 +1,26 @@
+# Single-box deployment (blueprint §9.1). `docker compose -f v6/docker-compose.yml up --build` from the repo root.
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: qc6, POSTGRES_DB: qc6 }
+    volumes: [ "pg:/var/lib/postgresql/data" ]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 5s, retries: 20 }
+  migrate:
+    build: { context: .., dockerfile: v6/Dockerfile }
+    command: ["python", "-m", "qc6.db.migrate"]
+    environment: { QC6_DATABASE_URL: "postgresql://postgres:qc6@postgres:5432/qc6" }
+    depends_on: { postgres: { condition: service_healthy } }
+  api:
+    build: { context: .., dockerfile: v6/Dockerfile }
+    environment: { QC6_DATABASE_URL: "postgresql://postgres:qc6@postgres:5432/qc6" }
+    ports: [ "8003:8003" ]
+    volumes: [ "data:/data" ]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+  worker:
+    build: { context: .., dockerfile: v6/Dockerfile }
+    command: ["python", "-m", "qc6.workers.runner"]
+    environment: { QC6_DATABASE_URL: "postgresql://postgres:qc6@postgres:5432/qc6", QC6_VISITORS_PER_HOST: "6" }
+    volumes: [ "data:/data" ]
+    shm_size: "1gb"
+    depends_on: { migrate: { condition: service_completed_successfully } }
+volumes: { pg: {}, data: {} }

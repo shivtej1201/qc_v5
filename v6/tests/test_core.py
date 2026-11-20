@@ -80,6 +80,7 @@ def test_rule_copy_is_human():
     assert rules.lint_copy() == []
     t = rules.render("H1_MISSING", n_pages=41200, template="Product", example="https://x.test/p/1")
     assert t["title"] == "41,200 Product pages have no main heading"
+    assert rules.render("PAGE_CHECK", n_pages=1, template="Product", value="not in sitemap")["title"] == "1 Product page: not in sitemap"
     assert rules.format_count(300000) == "3,00,000" and rules.format_count(300000, "intl") == "300,000"
     assert rules.format_count(12345678) == "1,23,45,678"
 

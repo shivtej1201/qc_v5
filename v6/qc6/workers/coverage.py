@@ -154,10 +154,27 @@ async def import_coverage(pool, run_id: int, site: Dict[str, Any], db_path: str,
     names: Dict[int, str] = {}
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Templates keep their identity across runs (fix keys depend on it): a cluster joins the site's existing
+            # template with the nearest layout fingerprint (within the clustering radius) and the same URL pattern
+            # family; only genuinely new layouts get a new template.
+            existing = [(r["id"], T.from_signed(r["fingerprint"]), r["path_pattern"])
+                        for r in await conn.fetch("SELECT id, fingerprint, path_pattern FROM templates WHERE site_id = $1", site["id"])]
+            taken: set = set()
             for t in idx.summary():
-                tid = await conn.fetchval(
-                    "INSERT INTO templates (site_id, fingerprint, name, path_pattern, page_count) VALUES ($1,$2,$3,$4,$5) RETURNING id",
-                    site["id"], T.to_signed(idx.centroids[t["id"]]), t["name"], t["pattern"], t["pages"])
+                fp = idx.centroids[t["id"]]
+                cands = [(T.distance(fp, efp), eid) for eid, efp, pat in existing
+                         if eid not in taken and T.distance(fp, efp) <= idx.radius]
+                same_pattern = [c for c in cands if next(p for i, _, p in existing if i == c[1]) == t["pattern"]]
+                pick = min(same_pattern or cands, default=None)
+                if pick is not None:
+                    tid = pick[1]
+                    await conn.execute("UPDATE templates SET name = $2, path_pattern = $3, page_count = $4 WHERE id = $1",
+                                       tid, t["name"], t["pattern"], t["pages"])
+                else:
+                    tid = await conn.fetchval(
+                        "INSERT INTO templates (site_id, fingerprint, name, path_pattern, page_count) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+                        site["id"], T.to_signed(fp), t["name"], t["pattern"], t["pages"])
+                taken.add(tid)
                 db_tpl[t["id"]] = tid
                 names[tid] = t["name"]
             await conn.executemany(

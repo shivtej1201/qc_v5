@@ -113,13 +113,22 @@ async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts
             await notify(conn, run_id, "visit", lane=lane, url=r.url, device=r.device, status=r.status,
                          steps=[s["step"] for s in r.timeline], **prog)
 
+    async def on_step(url: str, device: str, step: str, lane: int):
+        if step in ("settled", "done"):
+            return                       # keep the stream light: the lane shows what the visitor is doing now
+        try:
+            async with pool.acquire() as conn:
+                await notify(conn, run_id, "visit", lane=lane, url=url, device=device, status="running", steps=[step])
+        except Exception:
+            pass
+
     visitors = int(opts.get("visitors", site["settings"].get("visitors", settings.visitors_per_host)))
     persona = None
     if opts.get("fast_visits"):          # tests and demos only: shorter pauses, same steps
         from qc6.crawl.pacing import Persona
         persona = Persona(think_median_s=0.2, think_min_s=0.05, think_max_s=0.4, scroll_pause_min_s=0.05, scroll_pause_max_s=0.1)
     results = await run_visits(browser, site, targets, budget, visitors, on_result=on_result,
-                               consent=site["settings"].get("consent", "accept"), persona=persona)
+                               consent=site["settings"].get("consent", "accept"), persona=persona, on_step=on_step)
     f = findings_from(results, site["primary_host"])
     tpl_rows = await pool.fetch("SELECT id, name, page_count FROM templates WHERE site_id = $1 AND id = ANY($2::bigint[])",
                                 site["id"], [t for t in {r.template_id for r in results} if t is not None])

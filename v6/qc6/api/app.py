@@ -173,6 +173,7 @@ async def today(site_id: int, me=Depends(current_member)):
         cards.append({"kind": "access", "title": f"{s['primary_host']} paused our visitors", "text": hb["pause_reason"],
                       "action": "Copy the rule"})
     for f in await pool.fetch("""SELECT * FROM fixes WHERE site_id = $1 AND status = 'open' AND owner_id IS NULL AND NOT regressed
+                                 AND rule != 'JOURNEY_FAILED'
                                  AND severity IN ('critical','high') ORDER BY CASE severity WHEN 'critical' THEN 0 ELSE 1 END,
                                  pages_affected DESC LIMIT 3""", site_id):
         cards.append({"kind": "unassigned", "fix_id": f["id"], "title": f["title"], "text": "Nobody owns this yet.", "action": "Assign"})

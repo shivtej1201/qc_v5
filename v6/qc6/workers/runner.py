@@ -31,9 +31,20 @@ async def discover_urls(site: Dict[str, Any], opts: Dict[str, Any]) -> List[str]
     if opts.get("urls"):
         return list(dict.fromkeys(opts["urls"]))[: int(opts.get("max_pages", 300_000))]
     from qcv5.crawler.sitemap_extractor import SitemapExtractor
+    sitemaps = [x for x in (opts.get("sitemap"), (site.get("settings") or {}).get("sitemap")) if x]
+    if not sitemaps:                     # like a crawler would: robots.txt Sitemap lines, else /sitemap.xml
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15, headers={settings.access_header: site["access_token"]}) as c:
+                r = await c.get(site["base_url"] + "/robots.txt")
+                if r.status_code == 200:
+                    sitemaps = [l.split(":", 1)[1].strip() for l in r.text.splitlines() if l.lower().startswith("sitemap:")]
+        except httpx.HTTPError:
+            pass
+        sitemaps = sitemaps or [site["base_url"] + "/sitemap.xml"]
     ex = SitemapExtractor(allow_local=settings.allow_private_targets, max_urls=int(opts.get("max_pages", 300_000)))
-    res = await ex.extract_all([opts.get("sitemap") or site["base_url"]])
-    return [u["normalized_url"] for u in res.get("unique_urls", [])]
+    res = await ex.extract_all(sitemaps)
+    return [u["normalized_url"] for u in res.get("unique_urls", [])][: int(opts.get("max_pages", 300_000))]
 
 
 async def journey_stage(pool, browser, run_id: int, site: Dict[str, Any], fast: bool = False) -> Dict[str, Any]:

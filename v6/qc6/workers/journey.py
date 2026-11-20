@@ -283,7 +283,7 @@ class JourneyRunner:
         os.makedirs(self.objects_dir, exist_ok=True)
         name = f"journey-{abs(hash((out.name, out.device, time.time()))) % 10**12}-{i}.jpg"
         try:
-            await page.screenshot(path=os.path.join(self.objects_dir, name), type="jpeg", quality=60)
+            await page.screenshot(path=os.path.join(self.objects_dir, name), type="jpeg", quality=60, full_page=True)
             return name
         except Exception:
             return None

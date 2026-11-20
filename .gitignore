@@ -24,3 +24,5 @@ dist/
 
 # V6 runtime data
 v6/var/
+v6/web/node_modules/
+v6/web/dist/

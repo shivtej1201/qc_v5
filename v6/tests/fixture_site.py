@@ -77,8 +77,13 @@ class Handler(BaseHTTPRequestHandler):
         Handler.hits[p] = Handler.hits.get(p, 0) + 1
         Handler.hits["__ua__"] = self.headers.get("User-Agent", "")
         Handler.hits["__token__"] = self.headers.get("X-QC-Audit", "")
+        host = self.headers.get("Host", "127.0.0.1")
         if p == "/robots.txt":
-            return self._send(200, "User-agent: *\nAllow: /\n", "text/plain")
+            return self._send(200, f"User-agent: *\nAllow: /\nSitemap: http://{host}/sitemap.xml\n", "text/plain")
+        if p == "/sitemap.xml":
+            locs = "".join(f"<url><loc>http://{host}/{t}/{i}</loc></url>" for t in ("product", "article", "city") for i in range(30))
+            return self._send(200, f'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>',
+                              "application/xml")
         if p.startswith("/img/"):
             return self._send(200, PNG, "image/png")
         if p.startswith("/challenge"):

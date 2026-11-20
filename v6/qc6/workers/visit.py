@@ -95,6 +95,7 @@ class Visitor:
         self.ctx = None
         self.pages_in_ctx = 0
         self.stopped_reason: Optional[str] = None
+        self.on_step = None          # async (url, device, step) -> None, for the live view
 
     async def _new_context(self):
         if self.ctx is not None:
@@ -133,6 +134,8 @@ class Visitor:
 
     def _mark(self, res: VisitResult, step: str, t0: float, **kw):
         res.timeline.append({"step": step, "at_ms": int((time.perf_counter() - t0) * 1000), **kw})
+        if self.on_step is not None:
+            asyncio.get_running_loop().create_task(self.on_step(res.url, self.device, step))
 
     async def visit(self, target: VisitTarget) -> VisitResult:
         res = VisitResult(target.url, self.device, target.template_id)
@@ -269,7 +272,7 @@ async def default_user_agent(browser) -> str:
 
 async def run_visits(browser, site: Dict[str, Any], targets: List[VisitTarget], budget: Optional[HostBudget],
                      visitors: int, on_result=None, seed: int = 7, consent: str = "accept",
-                     persona: Optional[Persona] = None) -> List[VisitResult]:
+                     persona: Optional[Persona] = None, on_step=None) -> List[VisitResult]:
     """Run targets with `visitors` people in parallel; each person takes pages one at a time."""
     visitors = max(1, min(visitors, settings.visitors_max))
     q: asyncio.Queue = asyncio.Queue()
@@ -289,6 +292,8 @@ async def run_visits(browser, site: Dict[str, Any], targets: List[VisitTarget], 
                     v = per_device[t.device] = Visitor(browser, site, budget, t.device, seed * 1000 + i,
                                                        settings.objects_dir, persona=persona or Persona(),
                                                        consent=consent, ua=ua)
+                    if on_step is not None:
+                        v.on_step = (lambda lane: (lambda url, device, step: on_step(url, device, step, lane)))(i)
                 r = await v.visit(t)
                 results.append(r)
                 if on_result:

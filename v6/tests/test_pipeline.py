@@ -60,6 +60,10 @@ def test_full_run_creates_human_fixes(pg_pool, site_srv, tmp_path, monkeypatch):
         rid2 = await services.start_run(pool, sid, "coverage", {"urls": urls, "images": False})
         await execute_run(pool, rid2)
         after = await pool.fetchrow("SELECT status FROM fixes WHERE id = $1", fid)
+        # nothing changed on the site, so the second check must not "verify" anything (templates keep their identity)
+        verified = await pool.fetchval("SELECT COUNT(*) FROM fixes WHERE site_id = $1 AND status = 'verified' AND source = 'coverage'", sid)
+        tpl_count = await pool.fetchval("SELECT COUNT(*) FROM templates WHERE site_id = $1", sid)
+        assert verified == 0 and tpl_count == len(templates), (verified, tpl_count, len(templates))
         events = [r["kind"] for r in await pool.fetch("SELECT kind FROM fix_events WHERE fix_id = $1 ORDER BY id", fid)]
         await pool.close()
         return run, summary, fixes, templates, visits, jr, score, after, events

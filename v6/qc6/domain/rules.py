@@ -168,6 +168,8 @@ def render(code: str, **fields) -> Dict[str, str]:
         f["n_pages"] = format_count(f["n_pages"])
     if "template" in f and f["template"] and not str(f["template"]).endswith("pages"):
         f["template"] = f"{f['template']} pages"
+    if fields.get("n_pages") == 1 and str(f.get("template", "")).endswith(" pages"):
+        f["template"] = str(f["template"])[:-1]                     # "1 Product page", not "1 Product pages"
     return {"title": r.title.format_map(f), "why": r.why.format_map(f), "fix": r.fix.format_map(f),
             "verify": r.verify.format_map(f)}
 
