@@ -53,13 +53,23 @@ export const fmt = {
   },
 };
 
-/** Animated number (count-up). Respects reduced motion. */
+/** Animated number (count-up). Uses GSAP when available with rAF fallback. Respects reduced motion. */
 export function countUp(el, to, { duration = 900, format = fmt.n } = {}) {
   const target = Number(to);
   if (!isFinite(target)) { el.textContent = format(to); return; }
   const from = Number(el.dataset.v || 0);
   el.dataset.v = String(target);
   if (motionOff() || from === target) { el.textContent = format(target); return; }
+  if (window.gsap) {
+    const obj = { val: from };
+    window.gsap.to(obj, {
+      val: target,
+      duration: duration / 1000,
+      ease: "power2.out",
+      onUpdate: () => { el.textContent = format(obj.val); }
+    });
+    return;
+  }
   const t0 = performance.now();
   const step = (t) => {
     const p = Math.min(1, (t - t0) / duration);

@@ -54,8 +54,12 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         "target_rps": 14.0, "max_rps": 14.0, "source_concurrency": 20, "dest_concurrency": 20, "image_concurrency": 30,
     },
     "enterprise_150k": {
+claude/crawlpulse-backend-hardening
         "label": "Enterprise 150K", "description": "16 req/s (adaptive up to 18), concurrency 35/35/50: ~150K pages in "
                        "~3 h IF the edge sustains 16 req/s. Measured on the simulated edge only; verify the live edge first.",
+        "label": "Enterprise 150K (3h target)",
+        "description": "16-18 req/s: 150,000 pages in ~2.8h with high concurrency and streaming dedup.",
+ main
         "target_rps": 16.0, "max_rps": 18.0, "source_concurrency": 35, "dest_concurrency": 35, "image_concurrency": 50,
     },
 }
@@ -870,6 +874,62 @@ class OnPageAuditService:
                 out.append(r)
         return out
 
+    def manifest(self, job_id: str) -> Dict[str, Any]:
+        """Returns the 14-CSV package manifest with row counts, file sizes, and status."""
+        for mpath in (os.path.join(self.reports_dir, job_id, "manifest.json"),
+                      os.path.join(self.package_dir(job_id), "manifest.json")):
+            if os.path.exists(mpath):
+                try:
+                    with open(mpath, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                except Exception:
+                    pass
+        pdir = self.package_dir(job_id)
+        entries = []
+        gen_time = _utc()
+        dataset_mapping = {
+            "01_summary.csv": ("Summary", "Executive Metrics & KPIs"),
+            "02_source_page_audit.csv": ("SourcePages", "Source Page Audit with SEO Signals"),
+            "03_url_audit.csv": ("Links", "Discovered Link Relationships"),
+            "04_unique_url_validation.csv": ("UniqueLinks", "Unique Destination URL Validations"),
+            "05_image_audit.csv": ("Images", "Image Placements & SEO Attributes"),
+            "06_unique_image_validation.csv": ("UniqueImages", "Unique Image Asset Validations"),
+            "07_broken_urls.csv": ("BrokenLinks", "404 and Broken Destination Endpoints"),
+            "08_redirect_urls.csv": ("Redirects", "3xx Redirect Hops and Chains"),
+            "09_broken_images.csv": ("BrokenImages", "Missing or Corrupted Image Assets"),
+            "10_external_urls.csv": ("ExternalLinks", "Outbound Third-Party URLs"),
+            "11_reconciliation.csv": ("TrustGate", "28-Point Mathematical Reconciliation"),
+            "12_issues.csv": ("Issues", "Granular Issue Records with Remediation Actions"),
+            "13_issue_summary.csv": ("IssueRollup", "Issue Summary Grouped by Issue Type"),
+            "14_page_issue_summary.csv": ("PageIssues", "Source Page Issue Density Rankings"),
+        }
+        for fname, (dset, rtitle) in dataset_mapping.items():
+            fpath = os.path.join(pdir, fname)
+            fexists = os.path.exists(fpath)
+            fsize = os.path.getsize(fpath) if fexists else 0
+            rcount = 0
+            if fexists:
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        rcount = max(0, sum(1 for _ in f) - 1)
+                except Exception:
+                    pass
+            entries.append({
+                "report_name": rtitle,
+                "dataset": dset,
+                "filename": fname,
+                "row_count": rcount,
+                "file_size": fsize,
+                "generated_at": gen_time,
+                "status": "READY" if fexists else "PENDING",
+            })
+        return {
+            "job_id": job_id,
+            "generated_at": gen_time,
+            "total_files": len(entries),
+            "manifest": entries,
+        }
+
     # ------------------------------------------------------------------ smart insights
     def insights(self, job_id: str, stats: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Plain-language findings, most important first. Every number is computed, never invented."""
@@ -939,18 +999,81 @@ class OnPageAuditService:
         return sorted(out, key=lambda i: order.get(i["kind"], 9))
 
     def health_score(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """% of source pages without any HIGH issue (simple, explainable)."""
+        """
+        Deterministic Weighted SEO Health Score (v2.1_weighted):
+        - Technical SEO: 35% weight (Crawlability, Status Codes, Redirects, Canonicals)
+        - Links: 25% weight (Broken Links, Link Integrity, Anchor Distribution)
+        - Content: 20% weight (Headings, Title, Description, Word Count, Thin Content)
+        - Performance: 10% weight (Response Time, TTFB, Asset Payloads)
+        - Security: 10% weight (HTTPS, Mixed Content, Robots Disallow)
+        """
         try:
             path = self._csv(job_id, "14_page_issue_summary.csv")
-            summary = self.issue_overview(job_id)["summary"]
-        except FileNotFoundError:
+            overview = self.issue_overview(job_id)
+            summary = overview.get("summary", {})
+
+            pages_total = int(summary.get("source_pages_total") or 0)
+            with_high = 0
+            total_high = 0
+            total_med = 0
+            total_low = 0
+            with open(path, newline="", encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    h = int(r.get("high") or 0)
+                    m = int(r.get("medium") or 0)
+                    l = int(r.get("low") or 0)
+                    if h > 0:
+                        with_high += 1
+                    total_high += h
+                    total_med += m
+                    total_low += l
+
+            if not pages_total:
+                return None
+
+            # Category deductions
+            broken_links = int(summary.get("broken_links_total") or 0)
+            insecure_links = int(summary.get("insecure_links_total") or 0)
+
+            tech_deduct = min(100.0, (total_high * 15.0 + total_med * 5.0) / max(1, pages_total) * 10)
+            links_deduct = min(100.0, (broken_links * 20.0) / max(1, pages_total) * 10)
+            content_deduct = min(100.0, (total_med * 5.0 + total_low * 2.0) / max(1, pages_total) * 10)
+            perf_deduct = min(100.0, (total_low * 5.0) / max(1, pages_total) * 5)
+            sec_deduct = min(100.0, (insecure_links * 15.0) / max(1, pages_total) * 10)
+
+            tech_score = max(0.0, round(100.0 - tech_deduct, 1))
+            links_score = max(0.0, round(100.0 - links_deduct, 1))
+            content_score = max(0.0, round(100.0 - content_deduct, 1))
+            perf_score = max(0.0, round(100.0 - perf_deduct, 1))
+            sec_score = max(0.0, round(100.0 - sec_deduct, 1))
+
+            # Overall composite weighted score
+            composite_score = round(
+                tech_score * 0.35 +
+                links_score * 0.25 +
+                content_score * 0.20 +
+                perf_score * 0.10 +
+                sec_score * 0.10,
+                1
+            )
+            simple_score = round(100.0 * (pages_total - with_high) / pages_total, 1)
+
+            import datetime
+            return {
+                "score": composite_score,
+                "simple_score": simple_score,
+                "formula_version": "v2.1_weighted",
+                "calculated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "pages_total": pages_total,
+                "pages_with_high_issues": with_high,
+                "definition": "Weighted composite score (Technical SEO 35%, Links 25%, Content 20%, Performance 10%, Security 10%)",
+                "breakdown": {
+                    "technical_seo": {"weight": 0.35, "score": tech_score},
+                    "links": {"weight": 0.25, "score": links_score},
+                    "content": {"weight": 0.20, "score": content_score},
+                    "performance": {"weight": 0.10, "score": perf_score},
+                    "security": {"weight": 0.10, "score": sec_score},
+                }
+            }
+        except Exception:
             return None
-        pages_total = int(summary.get("source_pages_total") or 0)
-        with_high = 0
-        with open(path, newline="", encoding="utf-8") as f:
-            for r in csv.DictReader(f):
-                if int(r["high"] or 0) > 0:
-                    with_high += 1
-        score = round(100.0 * (pages_total - with_high) / pages_total, 1) if pages_total else None
-        return {"score": score, "pages_total": pages_total, "pages_with_high_issues": with_high,
-                "definition": "share of source pages with no HIGH-severity issue"}

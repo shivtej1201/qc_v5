@@ -662,6 +662,14 @@ async def onpage_detail(job_id: str):
     return d
 
 
+@app.get("/api/on-page/audits/{job_id}/health")
+async def onpage_health_detail(job_id: str):
+    h = onpage.health_score(job_id)
+    if h is None:
+        raise HTTPException(404, f"No health score found for job {job_id}")
+    return h
+
+
 @app.post("/api/on-page/audits/{job_id}/stop")
 async def onpage_stop(job_id: str):
     return _onpage_call(onpage.stop, job_id)
@@ -796,6 +804,11 @@ async def onpage_file(job_id: str, name: str):
     if not os.path.exists(path):
         raise HTTPException(404, "Report file not found")
     return FileResponse(path, filename=f"{job_id}_{name}", media_type="text/csv")
+
+
+@app.get("/api/on-page/audits/{job_id}/manifest")
+async def onpage_manifest(job_id: str):
+    return _onpage_call(onpage.manifest, job_id)
 
 
 @app.get("/api/debug")
