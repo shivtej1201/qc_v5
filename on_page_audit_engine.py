@@ -20,6 +20,7 @@ from classifier import Classifier
 from config import settings
 from diagnostics_403 import Diagnostics403
 from html_parser import Parser
+from http_pool import PerHostPoolTransport
 from seo_audit import SEO_COLUMNS, page_facts as seo_page_facts
 from status_classifier import StatusClassifier
 from url_normalizer import URLNormalizer
@@ -961,7 +962,8 @@ class OnPageAuditEngine:
                 extracted_at TIMESTAMP,
                 UNIQUE (job_id, source_page_url, normalized_found_url)
             );
-            CREATE INDEX IF NOT EXISTS idx_oplr_job ON on_page_link_relationships(job_id);
+            -- idx_oplr_job(job_id) dropped: the UNIQUE (job_id, source_page_url, normalized_found_url) index serves it
+            DROP INDEX IF EXISTS idx_oplr_job;
             CREATE INDEX IF NOT EXISTS idx_oplr_dest ON on_page_link_relationships(job_id, normalized_found_url);
             CREATE INDEX IF NOT EXISTS idx_oplr_scope ON on_page_link_relationships(job_id, found_url_scope);
             CREATE INDEX IF NOT EXISTS idx_oplr_valsrc ON on_page_link_relationships(job_id, validation_source);
@@ -1097,6 +1099,17 @@ class OnPageAuditEngine:
         return bool(self.primary_domain) and (
             host == self.primary_domain or host.endswith("." + self.primary_domain)
         )
+
+    def _is_heavy_host(self, host: str) -> bool:
+        """Hosts the crawler sends sustained traffic to (primary hosts, hosts with their own rate budget)."""
+        host = (host or "").lower().strip("[]")
+        if not host:
+            return False
+        if host in self.primary_hosts or (self.primary_domain and (
+                host == self.primary_domain or host.endswith("." + self.primary_domain))):
+            return True
+        return any(host == k or (k.startswith(".") and (host == k[1:] or host.endswith(k)))
+                   for k in self.host_budgets)
 
     def _budget_for(self, url: str) -> Optional["HostRateBudget"]:
         if not self.host_budgets or self._is_primary_host(url):
@@ -2934,12 +2947,17 @@ class OnPageAuditEngine:
         loop = asyncio.get_running_loop()
         parse_pool = concurrent.futures.ThreadPoolExecutor(self.parse_workers, thread_name_prefix="onpage-parse")
 
+        # one connection pool per host (see http_pool.py): httpcore re-scans every pooled connection on each
+        # request, so a single pool shared by the primary site, CDN and external hosts costs O(all connections)
+        transport = PerHostPoolTransport(
+            limits=limits, other_host_keepalive=self.per_host_concurrency,
+            is_heavy_host=self._is_heavy_host,
+            verify=False, http2=self.http2,
+        )
         async with httpx.AsyncClient(
-            verify=False,
+            transport=transport,
             timeout=timeout,
-            limits=limits,
             follow_redirects=False,
-            http2=self.http2,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept-Encoding": "gzip, deflate",

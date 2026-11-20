@@ -120,7 +120,8 @@ def main():
     finally:
         sim.terminate()
         sim.wait()
-        shutil.rmtree(work, ignore_errors=True)
+        if not a.work_dir:   # never delete a caller-supplied work dir (it holds the resumable checkpoint)
+            shutil.rmtree(work, ignore_errors=True)
 
 
 if __name__ == "__main__":
