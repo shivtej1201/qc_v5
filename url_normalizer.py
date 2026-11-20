@@ -186,72 +186,10 @@ class URLNormalizer:
             return "BLOCKED_SSRF"
 
     @staticmethod
-    def normalize(href: str, base_url: str = "") -> str:
-        """
-        Canonical URL Normalization according to RFC 3986:
-        - Leading/trailing whitespace trimmed
-        - Scheme and hostname lowercased
-        - Default ports (:80 for http, :443 for https) stripped
-        - Fragments (#...) removed
-        - Redundant duplicate slashes in path collapsed
-        - Duplicate query parameters deduplicated (preserving order)
-        - Protocol-relative (//...) resolved to https: (or base scheme)
-        - Relative URLs resolved if base_url provided
-        """
-        if not href or not isinstance(href, str):
-            return ""
+    def normalize(href: str) -> str:
         href = href.strip()
-        if not href:
-            return ""
-            
-        # Protocol-relative or relative resolution
-        if href.startswith("//"):
-            scheme = urllib.parse.urlsplit(base_url).scheme if base_url else "https"
-            href = f"{scheme or 'https'}:{href}"
-        elif base_url and not urllib.parse.urlsplit(href).scheme:
-            href = urllib.parse.urljoin(base_url, href)
-
-        try:
-            parsed = urllib.parse.urlsplit(href)
-        except Exception:
-            return href.split("#")[0].strip()
-
-        scheme = (parsed.scheme or "").lower()
-        netloc = parsed.netloc
-
-        if scheme in ("http", "https") and netloc:
-            hostname = (parsed.hostname or "").lower()
-            try:
-                port = parsed.port
-            except ValueError:
-                port = None
-            if port:
-                if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
-                    netloc = hostname
-                else:
-                    netloc = f"{hostname}:{port}"
-            elif hostname:
-                netloc = hostname
-
-        # Path: collapse multiple consecutive slashes
-        path = parsed.path
-        if path and scheme in ("http", "https"):
-            while "//" in path:
-                path = path.replace("//", "/")
-
-        # Query: deduplicate identical key-value pairs while preserving order
-        query = parsed.query
-        if query:
-            pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
-            seen = set()
-            unique_pairs = []
-            for k, v in pairs:
-                if (k, v) not in seen:
-                    seen.add((k, v))
-                    unique_pairs.append((k, v))
-            query = urllib.parse.urlencode(unique_pairs)
-
-        normalized = urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
+        parsed = urllib.parse.urlparse(href)
+        normalized = parsed._replace(fragment="").geturl()
         return normalized
 
     @staticmethod

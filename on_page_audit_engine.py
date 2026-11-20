@@ -1602,18 +1602,6 @@ class OnPageAuditEngine:
                 su.setdefault("html_bytes", 0)
                 su.setdefault("html_truncated", 0)
                 su.setdefault("attempts", 0)
-                su.setdefault("canonical_url", "")
-                su.setdefault("robots_meta", "")
-                su.setdefault("h1", "")
-                su.setdefault("h1_count", 0)
-                su.setdefault("title_length", 0)
-                su.setdefault("meta_description_length", 0)
-                su.setdefault("meta_description", "")
-                su.setdefault("word_count", 0)
-                su.setdefault("structured_data_types", "")
-                su.setdefault("og_title", "")
-                su.setdefault("og_image", "")
-                su.setdefault("twitter_card", "")
             self.conn.executemany(
                 """
                 UPDATE on_page_source_pages SET
@@ -1641,18 +1629,6 @@ class OnPageAuditEngine:
                     html_bytes = :html_bytes,
                     html_truncated = :html_truncated,
                     attempts = :attempts,
-                    canonical_url = :canonical_url,
-                    robots_meta = :robots_meta,
-                    h1 = :h1,
-                    h1_count = :h1_count,
-                    title_length = :title_length,
-                    meta_description_length = :meta_description_length,
-                    meta_description = :meta_description,
-                    word_count = :word_count,
-                    structured_data_types = :structured_data_types,
-                    og_title = :og_title,
-                    og_image = :og_image,
-                    twitter_card = :twitter_card,
                     remark = :remark,
                     checked_at = :checked_at
                 WHERE job_id = :job_id AND source_page_url = :source_page_url
@@ -2684,13 +2660,9 @@ class OnPageAuditEngine:
         Queued-but-unstarted destinations stay PENDING in the DB and are rescheduled on resume."""
         self._stop_requested = True
 
-claude/crawlpulse-backend-hardening
     def _parse_and_classify(self, src_url: str, final_url: str, html: str, seo_ctx: Optional[Tuple[str, str]] = None):
         """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title, images and
         the SEO signals. seo_ctx=(x_robots_tag, checked_at) requests the SEO row (2xx HTML pages only)."""
-    def _parse_and_classify(self, src_url: str, final_url: str, html: str):
-        """ONE Parser pass per page: links, canonical, hreflang, meta tags, data-pageType, title, SEO signals."""
-main
         raw_occ, rels, parser = extract_on_page_urls(src_url, final_url, html)
         raw_img, img_rels = 0, []
         if self.audit_images:
@@ -2701,29 +2673,11 @@ main
             seo = seo_page_facts(self.job_id, src_url, final_url, parser, rels, seo_ctx[0], seo_ctx[1])
         t1, t2, _ = self.classifier.extract_meta_tags(html[:32768], parser=None)
         title = " ".join((parser.title or "").split())[:300]
-        seo_meta = {
-            "canonical_url": parser.canonical or "",
-            "robots_meta": parser.robots_meta or "",
-            "h1": parser.primary_h1 or "",
-            "h1_count": parser.h1_count,
-            "title_length": parser.title_length,
-            "meta_description_length": parser.meta_description_length,
-            "meta_description": parser.meta_desc or "",
-            "word_count": parser.word_count,
-            "structured_data_types": parser.structured_data_summary,
-            "og_title": parser.og_title or "",
-            "og_image": parser.og_image or "",
-            "twitter_card": parser.twitter_card or "",
-        }
         if t1 and t2:
             return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title, seo
         clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
         return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
                 clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title, seo)
-            return raw_occ, rels, t2, t1, "META_TAG", t1, t2, raw_img, img_rels, title, seo_meta
-        clf = self.classifier.classify_from_html(src_url, final_url, html, parser=parser)
-        return (raw_occ, rels, clf.business or "NEEDS_REVIEW", clf.page_type or "NEEDS_REVIEW",
-                clf.method, clf.tag_1, clf.tag_2, raw_img, img_rels, title, seo_meta)main
 
     def performance_summary(self) -> Dict[str, Any]:
         m = self.metrics
@@ -3130,9 +3084,6 @@ main
                         raw_img, extracted_imgs = 0, []
                         page_title = ""
                         seo_row = None
-
-                        seo_meta = {}
-main
                         if html:
                             ctype = str(fetch_res.get("content_type") or "").lower()
                             seo_ctx = None
@@ -3140,13 +3091,8 @@ main
                                     and (not ctype or "html" in ctype)):
                                 seo_ctx = (fetch_res.get("x_robots_tag") or "", now_iso)
                             (raw_occ, extracted_rels, biz, pt, clf_method, tag_1, tag_2,
- 
                              raw_img, extracted_imgs, page_title, seo_row) = await loop.run_in_executor(
                                 parse_pool, self._parse_and_classify, src_url, final_src_url, html, seo_ctx
-
-                             raw_img, extracted_imgs, page_title, seo_meta) = await loop.run_in_executor(
-                                parse_pool, self._parse_and_classify, src_url, final_src_url, html
-main
                             )
                         else:
                             clf_res = self.classifier.classify_from_html(src_url, final_src_url, "")
@@ -3300,18 +3246,6 @@ main
                             "html_bytes": int(fetch_res.get("html_bytes") or 0),
                             "html_truncated": 1 if fetch_res.get("html_truncated") else 0,
                             "attempts": int(fetch_res.get("attempts") or 0),
-                            "canonical_url": seo_meta.get("canonical_url", ""),
-                            "robots_meta": seo_meta.get("robots_meta", ""),
-                            "h1": seo_meta.get("h1", ""),
-                            "h1_count": int(seo_meta.get("h1_count") or 0),
-                            "title_length": int(seo_meta.get("title_length") or len(page_title)),
-                            "meta_description_length": int(seo_meta.get("meta_description_length") or 0),
-                            "meta_description": seo_meta.get("meta_description", ""),
-                            "word_count": int(seo_meta.get("word_count") or 0),
-                            "structured_data_types": seo_meta.get("structured_data_types", ""),
-                            "og_title": seo_meta.get("og_title", ""),
-                            "og_image": seo_meta.get("og_image", ""),
-                            "twitter_card": seo_meta.get("twitter_card", ""),
                             "remark": fetch_res["remark"],
                             "checked_at": now_iso,
                             "_seo": seo_row,   # written in the same transaction as the page

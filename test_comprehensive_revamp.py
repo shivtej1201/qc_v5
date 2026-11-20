@@ -20,7 +20,7 @@ from sitemap_extractor import SitemapExtractor
 from html_parser import Parser
 from url_normalizer import URLNormalizer
 from on_page_audit_engine import extract_on_page_urls, extract_on_page_images
-from on_page_csv_packager import build_on_page_csv_package
+from on_page_csv_packager import DATASETS, build_on_page_csv_package
 from test_on_page_audit_performance import AKAMAI_403, Ctx, html_resp, make_engine, sources_for
 
 
@@ -177,21 +177,12 @@ def test_deterministic_crawl_and_extraction_fixtures():
         assert pkg["final_qc_status"] == "PASS"
         assert pkg["zip_verified"]
         
-        # Verify Manifest
-        assert "manifest" in pkg
-        assert len(pkg["manifest"]) == 14
+        # Verify the manifest (00_manifest.csv: every other report file, validated, with SHA-256)
         m_dict = {m["filename"]: m for m in pkg["manifest"]}
-        assert m_dict["01_summary.csv"]["status"] == "READY"
+        assert set(m_dict) == {n for n in DATASETS if n != "00_manifest.csv"}
+        assert all(m["status"] == "OK" and len(m["sha256"]) == 64 for m in m_dict.values())
         assert m_dict["02_source_page_audit.csv"]["row_count"] == 2
         assert m_dict["12_issues.csv"]["row_count"] > 0
-        
-        # Verify Manifest JSON on disk
-        manifest_path = os.path.join(ctx.dir, "manifest.json")
-        assert os.path.exists(manifest_path)
-        with open(manifest_path, encoding="utf-8") as f:
-            m_loaded = json.load(f)
-            assert m_loaded["job_id"] == "FULL_REVAMP"
-            assert len(m_loaded["files"]) == 14
             
         # Verify Extended SEO signals in 02_source_page_audit.csv
         p2 = os.path.join(pkg["work_dir"], "02_source_page_audit.csv")
@@ -206,7 +197,7 @@ def test_deterministic_crawl_and_extraction_fixtures():
         
         issues_row = [r for r in src_rows if r["source_page_url"].endswith("/p/seo-issues")][0]
         assert issues_row["h1_count"] == "0"
-        assert "noindex" in issues_row["robots_meta"]
+        assert "noindex" in issues_row["meta_robots"]
 
         # Verify Issues in 12_issues.csv
         p12 = os.path.join(pkg["work_dir"], "12_issues.csv")
@@ -214,12 +205,13 @@ def test_deterministic_crawl_and_extraction_fixtures():
             issues = list(csv.DictReader(f))
         types = {r["issue_type"] for r in issues}
         assert "NOT_FOUND" in types
-        assert "IMAGE_NOT_FOUND" in types
         assert "MISSING_ALT" in types
         assert "REDIRECTED" in types
-        assert "MISSING_H1" in types
-        assert "ROBOTS_NOINDEX" in types
+        assert "H1_MISSING" in types
+        assert "NOINDEX_IN_SITEMAP" in types
         assert "TITLE_TOO_SHORT" in types
+        assert any(r["category"] == "BROKEN_IMAGE" or r["issue_type"].startswith("IMAGE_") or
+                   (r["element_type"] == "IMAGE" and r["issue_type"] == "NOT_FOUND") for r in issues)
     finally:
         ctx.close()
 
@@ -232,8 +224,13 @@ def test_job_service_manifest_and_health_score():
     db_path = os.path.join(work, "test.db")
     svc = OnPageAuditService(base_dir=os.path.join(work, "jobs"), reports_dir=os.path.join(work, "reports"), db_path=db_path)
     
-    # Manifest fallback returns clean PENDING entries when package not yet built
-    m = svc.manifest("JOB_NON_EXISTENT")
-    assert m["total_files"] == 14
-    assert len(m["manifest"]) == 14
+    # Unknown job -> KeyError (the API maps it to 404); no invented manifest
+    with pytest.raises((KeyError, ValueError)):
+        svc.manifest("JOB_NON_EXISTENT")
+    with pytest.raises(KeyError):
+        svc.manifest("onpage_000000000000")
+    # A job whose package is not built yet lists every expected file as PENDING
+    svc._meta = lambda job_id: {"job_id": job_id}
+    m = svc.manifest("onpage_111111111111")
+    assert not m["ready"] and m["total_files"] == len(DATASETS) == 18
     assert all(e["status"] == "PENDING" for e in m["manifest"])

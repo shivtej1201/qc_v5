@@ -182,19 +182,6 @@ ON_PAGE_IMAGE_ALTERS = (
     "ALTER TABLE on_page_source_pages ADD COLUMN html_bytes INTEGER DEFAULT 0",
     "ALTER TABLE on_page_source_pages ADD COLUMN html_truncated INTEGER DEFAULT 0",
     "ALTER TABLE on_page_source_pages ADD COLUMN attempts INTEGER DEFAULT 0",
-    # SEO Signals & Technical Headings
-    "ALTER TABLE on_page_source_pages ADD COLUMN canonical_url TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN robots_meta TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN h1 TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN h1_count INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_source_pages ADD COLUMN title_length INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_source_pages ADD COLUMN meta_description_length INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_source_pages ADD COLUMN meta_description TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN word_count INTEGER DEFAULT 0",
-    "ALTER TABLE on_page_source_pages ADD COLUMN structured_data_types TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN og_title TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN og_image TEXT DEFAULT ''",
-    "ALTER TABLE on_page_source_pages ADD COLUMN twitter_card TEXT DEFAULT ''",
 )
 
 
