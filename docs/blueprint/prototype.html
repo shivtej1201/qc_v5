@@ -1,0 +1,741 @@
+<title>QC V6 Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: app shell = left rail + main column; screens swap on the hash (#today, #live, #fixes, #page, #journeys, #integrations, #spec).
+   Concept "Survey instrument": paper ground, ink text, one teal measuring colour, readings set in mono. */
+:root {
+  --ground: #F5F7F6; --surface: #FFFFFF; --surface-2: #EEF2F1; --line: #D8E0DE;
+  --ink: #14212B; --ink-2: #4A5A63; --ink-3: #76858C;
+  --measure: #0B7A75; --measure-ink: #FFFFFF; --measure-soft: #DDF1EF; --marker: #D99A1E; --marker-soft: #FBEFD5;
+  --critical: #B42318; --high: #C4320A; --medium: #B54708; --low: #3E6A8A; --good: #067647;
+  --shadow: 0 12px 32px -12px rgba(20, 33, 43, 0.28);
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --ground: #0F1519; --surface: #151D22; --surface-2: #1B252B; --line: #28343B;
+  --ink: #E6EDEF; --ink-2: #A6B4BA; --ink-3: #7A8A91;
+  --measure: #3CC4BB; --measure-ink: #06201E; --measure-soft: #123634; --marker: #F0B840; --marker-soft: #3A2E12;
+  --critical: #F97066; --high: #FB8A5A; --medium: #FDB022; --low: #7CB4DA; --good: #47CD89;
+  --shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.7); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --ground: #0F1519; --surface: #151D22; --surface-2: #1B252B; --line: #28343B;
+  --ink: #E6EDEF; --ink-2: #A6B4BA; --ink-3: #7A8A91;
+  --measure: #3CC4BB; --measure-ink: #06201E; --measure-soft: #123634; --marker: #F0B840; --marker-soft: #3A2E12;
+  --critical: #F97066; --high: #FB8A5A; --medium: #FDB022; --low: #7CB4DA; --good: #47CD89;
+  --shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.7); color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 var(--body); }
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--measure); }
+:focus-visible { outline: 2px solid var(--measure); outline-offset: 2px; }
+.mono { font-family: var(--mono); font-size: 13px; }
+.dim { color: var(--ink-2); } .faint { color: var(--ink-3); }
+.num { font-variant-numeric: tabular-nums; }
+
+.app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100%; }
+.rail { border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 6px;
+  padding-left: max(14px, env(safe-area-inset-left, 0px)); position: sticky; top: 0; height: 100vh; }
+.logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px; }
+.logo-mark { width: 30px; height: 30px; border-radius: 8px; border: 2px solid var(--measure); display: grid; place-items: center;
+  font: 600 13px var(--display); color: var(--measure); }
+.logo b { font: 600 17px var(--display); display: block; line-height: 1.1; }
+.logo span { font-size: 12px; color: var(--ink-3); }
+.site-switch { margin: 0 4px 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+.rail a.nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--ink-2);
+  text-decoration: none; font-weight: 500; }
+.rail a.nav:hover { background: var(--surface-2); color: var(--ink); }
+.rail a.nav[aria-current="page"] { background: var(--measure-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--measure); }
+.rail a.nav svg { width: 18px; height: 18px; flex: none; }
+.rail .count { margin-left: auto; font: 500 11px var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.rail .foot { margin-top: auto; font-size: 12px; color: var(--ink-3); padding: 8px; }
+.theme-btn { margin-top: 8px; background: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; color: var(--ink-2); }
+
+main { min-width: 0; padding: 28px 36px 64px; padding-right: max(36px, env(safe-area-inset-right, 0px)); }
+.screen { display: none; max-width: 1180px; }
+.screen.on { display: block; }
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+h1 { font: 600 30px/1.15 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font: 600 19px/1.3 var(--display); margin: 0; text-wrap: balance; }
+h3 { font: 600 15px/1.3 var(--body); margin: 0; }
+.lede { font-size: 17px; color: var(--ink-2); margin: 6px 0 0; max-width: 70ch; }
+.lede b { color: var(--ink); font-weight: 600; }
+.sample { font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3);
+  border: 1px dashed var(--line); border-radius: 999px; padding: 3px 10px; }
+
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 8px; min-height: 36px; }
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { background: var(--measure); border-color: var(--measure); color: var(--measure-ink); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.quiet { border-color: transparent; background: none; color: var(--ink-2); }
+.btn svg { width: 16px; height: 16px; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; gap: 16px; }
+.g-main { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.g-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; min-width: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.section-label { font: 500 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px; }
+
+/* severity: a mark + a word, never colour alone */
+.sev { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--body); white-space: nowrap; }
+.sev::before { content: ""; width: 3px; height: 14px; border-radius: 2px; background: currentColor; }
+.sev.critical { color: var(--critical); } .sev.high { color: var(--high); } .sev.medium { color: var(--medium); } .sev.low { color: var(--low); }
+.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 500;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.pill.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+.pill.warn { color: var(--medium); border-color: color-mix(in srgb, var(--medium) 40%, var(--line)); }
+.pill.bad { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 40%, var(--line)); }
+.pill.new { color: var(--ink); background: var(--marker-soft); border-color: color-mix(in srgb, var(--marker) 50%, var(--line)); }
+.chip { font: 12px var(--mono); color: var(--ink-2); background: var(--surface-2); border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.avatar { width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; font: 600 11px var(--body);
+  background: var(--measure-soft); color: var(--measure); flex: none; }
+.avatar.none { background: var(--surface-2); color: var(--ink-3); border: 1px dashed var(--line); }
+
+/* Today */
+.need { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
+.need:first-of-type { border-top: 0; }
+.need .icon { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-2); color: var(--ink-2); }
+.need .icon svg { width: 18px; height: 18px; }
+.need .icon.alert { background: color-mix(in srgb, var(--critical) 12%, var(--surface)); color: var(--critical); }
+.need p { margin: 2px 0 0; color: var(--ink-2); font-size: 14px; }
+.score { display: flex; align-items: baseline; gap: 10px; }
+.score b { font: 600 44px/1 var(--display); font-variant-numeric: tabular-nums; }
+.spark { width: 100%; height: 56px; display: block; }
+.facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.fact b { display: block; font: 500 20px var(--mono); }
+.fact span { font-size: 12px; color: var(--ink-3); }
+
+/* Live */
+.progress-line { height: 6px; background: var(--surface-2); border-radius: 6px; overflow: hidden; margin: 14px 0 6px; }
+.progress-line i { display: block; height: 100%; width: 41.5%; background: var(--measure); border-radius: 6px; }
+.lanes { display: grid; gap: 8px; }
+.lane { display: grid; grid-template-columns: 22px minmax(0, 1fr) 118px 70px; gap: 12px; align-items: center; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.lane svg { width: 18px; height: 18px; color: var(--ink-3); }
+.lane .path { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lane .act { color: var(--ink-2); white-space: nowrap; }
+.lane .scroll { height: 4px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.lane .scroll i { display: block; height: 100%; width: 0; background: var(--measure); }
+.pace { width: 100%; height: 150px; display: block; }
+.found { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.found li { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--line); font-size: 14px; }
+
+/* Fixes */
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 7px 12px; cursor: pointer; color: var(--ink-2); font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--measure-soft); color: var(--ink); font-weight: 600; }
+.search { flex: 1 1 220px; min-width: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 12px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3);
+  padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); white-space: nowrap; }
+td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--surface-2); }
+td.title { min-width: 280px; font-weight: 500; }
+td .sub { display: block; font-weight: 400; font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+
+.drawer-back { position: fixed; inset: 0; background: rgba(15, 21, 25, 0.38); display: none; z-index: 40; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: var(--shadow); z-index: 41; display: none; flex-direction: column;
+  padding: calc(env(safe-area-inset-top, 0px) + 22px) max(22px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 22px) 22px; overflow-y: auto; }
+.drawer.on, .drawer-back.on { display: flex; }
+.drawer-back.on { display: block; }
+.qa { display: grid; gap: 14px; margin: 18px 0; }
+.qa div { border-left: 2px solid var(--line); padding-left: 12px; }
+.qa h3 { font-size: 13px; color: var(--ink-3); font-weight: 500; margin-bottom: 2px; }
+.qa p { margin: 0; }
+.timeline { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 10px; font-size: 13.5px; }
+.timeline li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; }
+.thumbs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+
+/* page mocks (drawn, not images) */
+.mock { border: 1px solid var(--line); border-radius: 8px; background: var(--ground); padding: 8px; display: grid; gap: 5px; aspect-ratio: 4 / 3; max-width: 100%; position: relative; overflow: hidden; }
+.mock i { display: block; background: var(--line); border-radius: 3px; height: 7px; }
+.mock i.h { height: 12px; width: 70%; background: var(--ink-3); opacity: 0.55; }
+.mock i.img { height: 34%; background: var(--surface-2); border: 1px solid var(--line); }
+.mock i.s { width: 55%; } .mock i.m { width: 80%; }
+.mock .hl { position: absolute; border: 2px solid var(--marker); border-radius: 4px; background: color-mix(in srgb, var(--marker) 14%, transparent); }
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.compare .mock { aspect-ratio: 3 / 4; padding: 14px; gap: 8px; }
+.compare .mock i { height: 9px; }
+.compare .mock i.h { height: 16px; }
+.metric { display: grid; gap: 4px; }
+.metric b { font: 500 22px var(--mono); }
+.band { height: 6px; border-radius: 6px; background: linear-gradient(90deg, var(--good) 0 50%, var(--medium) 50% 80%, var(--critical) 80% 100%); position: relative; opacity: 0.85; }
+.band i { position: absolute; top: -4px; width: 3px; height: 14px; background: var(--ink); border-radius: 2px; }
+.kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; font-size: 14px; margin: 0; }
+.kv dt { color: var(--ink-3); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Journeys */
+.dots { display: inline-flex; gap: 3px; }
+.dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.dots i.f { background: var(--critical); }
+.film { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+.frame { display: grid; gap: 6px; font-size: 12.5px; min-width: 0; }
+.frame .mock { aspect-ratio: 9 / 16; }
+.frame.fail .mock { border-color: var(--critical); box-shadow: 0 0 0 1px var(--critical); }
+.frame b { font-weight: 600; }
+.failure { border: 1px solid color-mix(in srgb, var(--critical) 45%, var(--line)); border-radius: 10px; padding: 16px; background: color-mix(in srgb, var(--critical) 5%, var(--surface)); margin-top: 16px; }
+.failure p { margin: 6px 0 0; max-width: 72ch; }
+
+/* Integrations */
+.int { display: grid; gap: 8px; align-content: start; }
+.int .row { justify-content: space-between; }
+.int p { margin: 0; color: var(--ink-2); font-size: 14px; }
+
+/* Spec */
+.spec { max-width: 860px; }
+.spec h1 { font-size: 28px; margin-bottom: 14px; }
+.spec h2 { margin: 36px 0 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.spec h3 { margin: 22px 0 6px; }
+.spec p, .spec li { max-width: 72ch; }
+.spec table { font-size: 13.5px; }
+.spec td, .spec th { padding: 8px 12px; text-transform: none; letter-spacing: 0; }
+.spec th { font: 600 13px var(--body); color: var(--ink-2); }
+.spec pre { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; font: 12.5px/1.5 var(--mono); }
+.spec code { font-family: var(--mono); font-size: 0.9em; }
+.spec .table-wrap { margin: 12px 0; }
+.spec tbody tr { cursor: default; }
+
+.toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 24px); transform: translateX(-50%); background: var(--ink); color: var(--ground);
+  padding: 10px 16px; border-radius: 8px; font-size: 14px; z-index: 60; display: none; }
+
+@media (max-width: 1060px) { .g-main { grid-template-columns: minmax(0, 1fr); } .g-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: fixed; top: auto; bottom: 0; left: 0; right: 0; height: auto; flex-direction: row; z-index: 30; background: var(--surface);
+    border-right: 0; border-top: 1px solid var(--line); padding: 6px max(8px, env(safe-area-inset-left, 0px)) calc(env(safe-area-inset-bottom, 0px) + 6px); overflow-x: auto; gap: 2px; }
+  .rail .logo, .rail .site-switch, .rail .foot, .rail .count { display: none; }
+  .rail a.nav { flex-direction: column; gap: 2px; font-size: 11px; padding: 6px 10px; }
+  .rail a.nav[aria-current="page"] { box-shadow: inset 0 -2px 0 var(--measure); }
+  main { padding: 20px max(16px, env(safe-area-inset-left, 0px)) 110px; padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .g-3, .compare { grid-template-columns: minmax(0, 1fr); }
+  .lane { grid-template-columns: 22px minmax(0, 1fr) 70px; } .lane .act { display: none; }
+  h1 { font-size: 25px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-today" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M4 12a8 8 0 1 0 16 0 8 8 0 0 0-16 0zM12 7v5l3 2"/></symbol>
+  <symbol id="i-live" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M3 12h4l2-6 4 12 2-6h6"/></symbol>
+  <symbol id="i-fix" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" d="M9 11l3 3 8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></symbol>
+  <symbol id="i-page" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" d="M7 3h7l5 5v13H7zM14 3v5h5"/></symbol>
+  <symbol id="i-journey" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M5 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM19 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM7 17h6a3 3 0 0 0 0-6h-2a3 3 0 0 1 0-6h6"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M4 5h16M4 10h16M4 15h10M4 20h7"/></symbol>
+  <symbol id="i-desktop" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M3 5h18v11H3zM8 20h8M12 16v4"/></symbol>
+  <symbol id="i-mobile" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M8 3h8v18H8zM11 18h2"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M4 17l6-6 4 4 6-8"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M9 6v12M15 6v12"/></symbol>
+  <symbol id="i-slow" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" d="M12 13l3-3M5 18a8 8 0 1 1 14 0"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="rail" aria-label="Main">
+    <div class="logo"><div class="logo-mark">QC</div><div><b>QC V6</b><span>Site quality</span></div></div>
+    <div class="site-switch"><span class="mono">www.example.com</span><span class="faint">▾</span></div>
+    <a class="nav" href="#today" data-v="today"><svg><use href="#i-today"/></svg>Today<span class="count">3</span></a>
+    <a class="nav" href="#live" data-v="live"><svg><use href="#i-live"/></svg>Live run</a>
+    <a class="nav" href="#fixes" data-v="fixes"><svg><use href="#i-fix"/></svg>Fixes<span class="count">27</span></a>
+    <a class="nav" href="#page" data-v="page"><svg><use href="#i-page"/></svg>Page</a>
+    <a class="nav" href="#journeys" data-v="journeys"><svg><use href="#i-journey"/></svg>Journeys</a>
+    <a class="nav" href="#integrations" data-v="integrations"><svg><use href="#i-plug"/></svg>Integrations</a>
+    <a class="nav" href="#spec" data-v="spec"><svg><use href="#i-doc"/></svg>Design spec</a>
+    <div class="foot">Prototype with sample data.<br><button class="theme-btn" id="theme" type="button">Switch light / dark</button></div>
+  </aside>
+
+  <main id="main">
+    <!-- TODAY -->
+    <section class="screen" id="v-today" aria-labelledby="t-today">
+      <div class="head">
+        <div>
+          <h1 id="t-today">Good morning, Priya</h1>
+          <p class="lede">Last night's check of www.example.com finished at 03:42. <b>3 things need you.</b> Everything else is moving.</p>
+        </div>
+        <span class="sample">Sample data</span>
+      </div>
+      <div class="grid g-main">
+        <div class="panel" data-anim>
+          <p class="section-label">Needs you</p>
+          <div class="need" data-item>
+            <div class="icon alert"><svg><use href="#i-up"/></svg></div>
+            <div><h3>The product page lost its main heading again</h3>
+              <p>41,200 pages since Tuesday's release. It was fixed on 4 Nov and verified. <span class="pill new">Regressed</span></p></div>
+            <a class="btn primary" href="#fixes">Open fix</a>
+          </div>
+          <div class="need" data-item>
+            <div class="icon alert"><svg><use href="#i-journey"/></svg></div>
+            <div><h3>"Check loan eligibility" fails on mobile</h3>
+              <p>Step 4: nothing happened for 8 s after tapping Continue. Failed 2 nights in a row.</p></div>
+            <a class="btn" href="#journeys">See the step</a>
+          </div>
+          <div class="need" data-item>
+            <div class="icon"><svg><use href="#i-shield"/></svg></div>
+            <div><h3>Akamai paused our visitors on cms-assets.example.com</h3>
+              <p>The coverage check finished; 312 real-visitor checks waited. Your CDN team needs one allow rule.</p></div>
+            <button class="btn" type="button" data-copy="rule">Copy the rule</button>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="panel" data-anim>
+            <div class="panel-head"><h2>Site health</h2><span class="faint" style="font-size:13px">30 days</span></div>
+            <div class="score"><b class="num" data-count="78">78</b><span class="dim">up 4 since the Monday release</span></div>
+            <svg class="spark" viewBox="0 0 300 56" preserveAspectRatio="none" aria-label="Health score over 30 days, from 69 to 78">
+              <path d="M0 40 L30 42 L60 38 L90 39 L120 33 L150 35 L180 30 L210 31 L240 26 L270 22 L300 20 L300 56 L0 56 Z" fill="var(--measure-soft)"/>
+              <path d="M0 40 L30 42 L60 38 L90 39 L120 33 L150 35 L180 30 L210 31 L240 26 L270 22 L300 20" fill="none" stroke="var(--measure)" stroke-width="2"/>
+              <circle cx="300" cy="20" r="3.5" fill="var(--measure)"/>
+            </svg>
+          </div>
+          <div class="panel" data-anim>
+            <p class="section-label">What we checked last night</p>
+            <p style="margin:0">Every page in your sitemap, every link and image on them, and a real-browser visit to <b>5,240 pages</b> covering all <b>204 page types</b>.</p>
+            <div class="facts">
+              <div class="fact"><b class="num">3,00,000</b><span>pages · 3 h 12 min</span></div>
+              <div class="fact"><b class="num">5,240</b><span>visits · desktop 38%, mobile 62%</span></div>
+              <div class="fact"><b class="num">9 / 10</b><span>journeys passed</span></div>
+              <div class="fact"><b class="num">0</b><span>numbers that don't add up</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIVE -->
+    <section class="screen" id="v-live" aria-labelledby="t-live">
+      <div class="head">
+        <div>
+          <h1 id="t-live">Checking www.example.com</h1>
+          <p class="lede" aria-live="polite"><b class="num" id="live-done">1,24,500</b> of 3,00,000 pages checked · about 1 h 40 min left · 20 visitors browsing</p>
+        </div>
+        <div class="row">
+          <button class="btn" type="button" data-toast="Slowing down: 25% fewer requests per second."><svg><use href="#i-slow"/></svg>Slow down</button>
+          <button class="btn" type="button" data-toast="Pausing after the pages in progress finish."><svg><use href="#i-pause"/></svg>Pause</button>
+        </div>
+      </div>
+      <div class="progress-line" aria-hidden="true"><i id="live-bar"></i></div>
+      <p class="faint" style="font-size:13px;margin:0 0 20px">Coverage check 41% · Real-visitor checks 2,180 of 5,240 · Journeys queued for 06:30</p>
+      <div class="grid g-main">
+        <div class="panel" data-anim>
+          <div class="panel-head"><h2>Visitors right now</h2><span class="faint" style="font-size:13px">each reads one page at a time</span></div>
+          <div class="lanes" id="lanes"></div>
+        </div>
+        <div class="grid">
+          <div class="panel" data-anim>
+            <div class="panel-head"><h2>Pace</h2><span class="faint" style="font-size:13px">requests per second · budget 30</span></div>
+            <svg class="pace" viewBox="0 0 320 150" aria-label="Requests per second over the last 30 minutes, steady near 29 within a budget of 30, one pause at minute 18">
+              <rect x="0" y="22" width="320" height="10" fill="var(--measure-soft)"/>
+              <text x="4" y="18" font-size="10" fill="var(--ink-3)" font-family="JetBrains Mono, monospace">budget 30 req/s</text>
+              <path d="M0 40 L20 34 L40 31 L60 30 L80 30 L100 29 L120 31 L140 30 L160 30 L180 88 L190 92 L200 46 L220 31 L240 30 L260 29 L280 30 L300 30 L320 30" fill="none" stroke="var(--measure)" stroke-width="2"/>
+              <line x1="185" y1="22" x2="185" y2="130" stroke="var(--marker)" stroke-dasharray="3 3"/>
+              <text x="190" y="120" font-size="10" fill="var(--ink-2)" font-family="Instrument Sans, sans-serif">slowed for 2 min: 3 slow replies</text>
+              <line x1="0" y1="140" x2="320" y2="140" stroke="var(--line)"/>
+              <text x="0" y="150" font-size="9" fill="var(--ink-3)" font-family="JetBrains Mono, monospace">30 min ago</text>
+              <text x="290" y="150" font-size="9" fill="var(--ink-3)" font-family="JetBrains Mono, monospace">now</text>
+            </svg>
+          </div>
+          <div class="panel" data-anim>
+            <div class="panel-head"><h2>Found so far</h2><span class="faint" style="font-size:13px">grouped into fixes</span></div>
+            <ul class="found" id="found">
+              <li><span class="sev high">High</span><span>Product pages have no main heading <span class="faint">· 18,940 pages so far</span></span></li>
+              <li><span class="sev medium">Medium</span><span>Cookie banner shifts the page by 0.24 on mobile <span class="faint">· 61 of 61 visits</span></span></li>
+              <li><span class="sev low">Low</span><span>212 links point to a page that now redirects</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FIXES -->
+    <section class="screen" id="v-fixes" aria-labelledby="t-fixes">
+      <div class="head">
+        <div>
+          <h1 id="t-fixes">Fixes</h1>
+          <p class="lede">27 problems across 3,00,000 pages. Each row is one thing to fix, however many pages it touches.</p>
+        </div>
+        <button class="btn" type="button" data-toast="3 GitHub issues created and linked.">Create tickets</button>
+      </div>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Show">
+          <button type="button" aria-pressed="true" data-filter="needs">Needs you · 9</button>
+          <button type="button" aria-pressed="false" data-filter="all">All · 27</button>
+          <button type="button" aria-pressed="false" data-filter="verify">Waiting for check · 4</button>
+        </div>
+        <input class="search" id="fix-search" type="search" placeholder="Find a fix, page or template" aria-label="Find a fix">
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Severity</th><th>What's wrong</th><th>Page type</th><th class="num">Pages</th><th>Owner</th><th>Status</th></tr></thead>
+          <tbody id="fix-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- PAGE -->
+    <section class="screen" id="v-page" aria-labelledby="t-page">
+      <div class="head">
+        <div>
+          <h1 id="t-page" class="mono" style="font-size:20px;font-family:var(--mono)">/personal-loan/pune</h1>
+          <p class="lede">Loan city page · visited 03:12 on mobile · <b>4 links and the main heading only appear after JavaScript runs.</b></p>
+        </div>
+        <span class="sample">Sample data</span>
+      </div>
+      <div class="grid g-main">
+        <div class="panel" data-anim>
+          <div class="panel-head"><h2>What the server sent vs what a visitor saw</h2></div>
+          <div class="compare">
+            <div><p class="section-label">Server HTML</p>
+              <div class="mock" aria-label="Raw HTML: navigation, empty main area, footer">
+                <i class="s"></i><i class="m"></i><i style="height:42%;background:transparent;border:1px dashed var(--line)"></i><i class="s"></i><i class="m"></i>
+              </div></div>
+            <div><p class="section-label">Rendered for a visitor</p>
+              <div class="mock" aria-label="Rendered page: heading, hero image, text and links; the heading is highlighted because it is only in the rendered version">
+                <i class="s"></i><i class="h"></i><i class="img"></i><i class="m"></i><i class="m"></i><i class="s"></i><i class="m"></i>
+                <span class="hl" style="left:10px;top:30px;width:74%;height:22px"></span>
+              </div></div>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="panel" data-anim>
+            <p class="section-label">What a visitor experienced</p>
+            <div class="grid" style="gap:14px">
+              <div class="metric"><div class="row" style="justify-content:space-between"><span>Largest paint</span><b class="num">3.1 s</b></div><div class="band"><i style="left:58%"></i></div></div>
+              <div class="metric"><div class="row" style="justify-content:space-between"><span>Layout shift</span><b class="num">0.24</b></div><div class="band"><i style="left:84%"></i></div></div>
+              <div class="metric"><div class="row" style="justify-content:space-between"><span>Response to tap</span><b class="num">140 ms</b></div><div class="band"><i style="left:32%"></i></div></div>
+            </div>
+          </div>
+          <div class="panel" data-anim>
+            <p class="section-label">Page facts</p>
+            <dl class="kv">
+              <dt>Title</dt><dd>Personal Loan in Pune — Apply Online</dd>
+              <dt>Main heading</dt><dd>Only after JavaScript</dd>
+              <dt>Canonical</dt><dd class="mono">/personal-loan/pune</dd>
+              <dt>Accessibility</dt><dd>2 serious: button without a name, low contrast in the rate table</dd>
+              <dt>Console</dt><dd>1 error: <span class="mono">TypeError: offers is undefined</span></dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- JOURNEYS -->
+    <section class="screen" id="v-journeys" aria-labelledby="t-journeys">
+      <div class="head">
+        <div>
+          <h1 id="t-journeys">Journeys</h1>
+          <p class="lede">The paths customers take, walked every morning at a person's pace. <b>9 of 10 passed today.</b></p>
+        </div>
+        <button class="btn primary" type="button" data-toast="Recorder opens in a new browser window (phase 2).">Record a journey</button>
+      </div>
+      <div class="table-wrap" style="margin-bottom:18px">
+        <table>
+          <thead><tr><th>Journey</th><th>Device</th><th>Last 14 days</th><th>Last run</th></tr></thead>
+          <tbody>
+            <tr><td class="title">Check loan eligibility<span class="sub">8 steps · stops before submitting</span></td><td>Mobile</td>
+              <td><span class="dots" aria-label="12 passed, then 2 failed"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i><i class="f"></i></span></td><td><span class="pill bad">Failed at step 4</span></td></tr>
+            <tr><td class="title">Search a branch near me<span class="sub">5 steps</span></td><td>Desktop</td>
+              <td><span class="dots" aria-label="14 passed"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></td><td><span class="pill good">Passed · 41 s</span></td></tr>
+            <tr><td class="title">Read an EMI article and use the calculator<span class="sub">6 steps</span></td><td>Mobile</td>
+              <td><span class="dots" aria-label="14 passed"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></td><td><span class="pill good">Passed · 58 s</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel" data-anim>
+        <div class="panel-head"><h2>Check loan eligibility · today 06:31 · mobile</h2><span class="pill bad">Failed</span></div>
+        <div class="film" id="film">
+          <div class="frame" data-item><div class="mock"><i class="h"></i><i class="img"></i><i class="m"></i></div><b>1 Open</b><span class="faint">Loaded in 2.1 s</span></div>
+          <div class="frame" data-item><div class="mock"><i class="s"></i><i class="h"></i><i class="m"></i><i class="m"></i></div><b>2 Tap "Check eligibility"</b><span class="faint">0.4 s</span></div>
+          <div class="frame" data-item><div class="mock"><i class="h"></i><i class="m"></i><i class="m"></i><i class="s"></i></div><b>3 Type income, city</b><span class="faint">typed at 38 wpm</span></div>
+          <div class="frame fail" data-item><div class="mock"><i class="h"></i><i class="m"></i><i class="m"></i><span class="hl" style="left:8px;bottom:14px;width:60%;height:18px"></span></div><b>4 Tap "Continue"</b><span style="color:var(--critical)">Nothing happened</span></div>
+          <div class="frame" data-item style="opacity:.45"><div class="mock"></div><b>5 Expect result</b><span class="faint">Not reached</span></div>
+          <div class="frame" data-item style="opacity:.45"><div class="mock"></div><b>6 Stop before submit</b><span class="faint">Not reached</span></div>
+        </div>
+        <div class="failure">
+          <h3>Step 4: nothing happened for 8 seconds after tapping "Continue"</h3>
+          <p>The button was visible and enabled. After the tap, the page made no request and showed no message. Three console errors appeared, the first one: <span class="mono">TypeError: Cannot read properties of undefined (reading 'city')</span>. This started after the release on 18 Nov; the same journey passed on desktop.</p>
+          <div class="row" style="margin-top:12px"><button class="btn" type="button" data-toast="Trace opens in the Playwright trace viewer.">Watch the trace</button><button class="btn" type="button" data-toast="GitHub issue created with the screenshot and trace.">Create GitHub issue</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- INTEGRATIONS -->
+    <section class="screen" id="v-integrations" aria-labelledby="t-int">
+      <div class="head">
+        <div>
+          <h1 id="t-int">Integrations</h1>
+          <p class="lede">Free services that add real-user data and search performance to what we measure ourselves.</p>
+        </div>
+      </div>
+      <div class="grid g-3" id="ints"></div>
+    </section>
+
+    <!-- SPEC -->
+    <section class="screen" id="v-spec" aria-labelledby="t-spec">
+      <div class="spec" id="spec-body"><h1 id="t-spec">Design spec</h1><p class="faint">Loading the spec…</p></div>
+    </section>
+  </main>
+</div>
+
+<div class="drawer-back" id="back"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title">
+  <div class="row" style="justify-content:space-between;align-items:flex-start">
+    <div><span class="sev high" id="d-sev">High</span><h2 id="d-title" style="margin-top:6px">Product pages have no main heading</h2></div>
+    <button class="btn quiet" type="button" id="d-close" aria-label="Close">Close</button>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <span class="avatar none" id="d-av">?</span>
+    <select id="d-owner" aria-label="Owner"><option>Unassigned</option><option>Rahul Mehta</option><option>Ananya Iyer</option><option>Priya Nair</option></select>
+    <span class="pill new" id="d-status">Regressed</span>
+  </div>
+  <div class="qa">
+    <div><h3>What's wrong</h3><p id="d-what">41,200 product pages have no &lt;h1&gt;. The heading was removed from the product template in Tuesday's release.</p></div>
+    <div><h3>Why it matters</h3><p>Search engines and screen-reader users rely on the main heading to understand what a page is about.</p></div>
+    <div><h3>How to fix</h3><p>Add one &lt;h1&gt; to the product template that states the product name.</p></div>
+    <div><h3>How we'll know</h3><p>On the next run the count drops to 0 and this fix moves to Verified. You can check one page now: <span class="mono">/products/cast-iron-pan</span></p></div>
+  </div>
+  <p class="section-label">Seen on these pages</p>
+  <div class="thumbs"><div class="mock"><i class="s"></i><i class="img"></i><i class="m"></i></div><div class="mock"><i class="s"></i><i class="img"></i><i class="m"></i></div><div class="mock"><i class="s"></i><i class="img"></i><i class="m"></i></div></div>
+  <p class="section-label" style="margin-top:20px">History</p>
+  <ul class="timeline">
+    <li><span class="faint mono">19 Nov</span><span>Found again on 41,200 pages after the release</span></li>
+    <li><span class="faint mono">4 Nov</span><span>Verified by the nightly run</span></li>
+    <li><span class="faint mono">2 Nov</span><span>Rahul marked it fixed</span></li>
+    <li><span class="faint mono">28 Oct</span><span>First found</span></li>
+  </ul>
+  <div class="row" style="margin-top:22px"><button class="btn primary" type="button" data-toast="GitHub issue #1824 created and linked.">Create GitHub issue</button><button class="btn" type="button" data-toast="Marked as in progress.">Start working</button></div>
+</aside>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  const G = () => window.gsap || null;
+  const reduce = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const fmtIN = (n) => Math.round(n).toLocaleString("en-IN");
+  let ctx = null;
+
+  /* ---------- theme ---------- */
+  $("#theme").addEventListener("click", () => {
+    const cur = document.documentElement.dataset.theme ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
+  });
+
+  /* ---------- toast ---------- */
+  function toast(msg) {
+    const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+    if (G() && !reduce()) G().fromTo(t, { y: 12, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.25, ease: "power2.out" });
+    clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = "none"; }, 2600);
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-toast]"); if (b) toast(b.dataset.toast);
+    const c = e.target.closest("[data-copy]");
+    if (c) {
+      const rule = "Akamai Bot Manager: allow requests with header X-QC-Audit equal to <token> from 203.0.113.24; exclude from rate controls up to 40 req/s.";
+      try { await navigator.clipboard.writeText(rule); toast("Rule copied. Send it to your CDN team."); }
+      catch { toast("Copy blocked here. The rule is in Settings → Crawler access."); }
+    }
+  });
+
+  /* ---------- fixes ---------- */
+  const FIXES = [
+    { sev: "high", t: "Product pages have no main heading", sub: "Regressed after Tuesday's release", tpl: "Product", n: 41200, who: "", st: ["new", "Regressed"], f: "needs" },
+    { sev: "high", t: "212 links point to pages that no longer exist", sub: "From 3,410 pages, mostly the footer", tpl: "Site-wide", n: 3410, who: "AI", st: ["warn", "In progress"], f: "needs" },
+    { sev: "medium", t: "Cookie banner shifts the page on mobile", sub: "Layout shift 0.24 on every visit", tpl: "All templates", n: 300000, who: "", st: ["", "Open"], f: "needs" },
+    { sev: "medium", t: "City pages show their heading only after JavaScript", sub: "Search engines may not see it", tpl: "Loan city", n: 2860, who: "RM", st: ["", "Open"], f: "needs" },
+    { sev: "medium", t: "Rate table text is too light to read", sub: "Contrast 2.9:1, needs 4.5:1", tpl: "Loan product", n: 64, who: "AI", st: ["good", "Fixed — waiting for check"], f: "verify" },
+    { sev: "low", t: "Image files over 500 KB on article pages", sub: "Slows the largest paint by ~0.8 s", tpl: "Article", n: 7120, who: "", st: ["", "Open"], f: "needs" },
+    { sev: "low", t: "Duplicate titles on branch pages", sub: "1,288 pages share 96 titles", tpl: "Branch", n: 1288, who: "PN", st: ["good", "Fixed — waiting for check"], f: "verify" },
+    { sev: "low", t: "Missing description on calculator pages", sub: "Search results show page text instead", tpl: "Calculator", n: 38, who: "PN", st: ["good", "Verified"], f: "all" },
+  ];
+  let filter = "needs", query = "";
+  function renderFixes() {
+    const rows = FIXES.filter((x) => (filter === "all" || x.f === filter) && (x.t + x.tpl + x.sub).toLowerCase().includes(query));
+    const tb = $("#fix-rows");
+    tb.innerHTML = "";
+    rows.forEach((x) => {
+      const tr = document.createElement("tr");
+      tr.tabIndex = 0;
+      tr.innerHTML = `<td><span class="sev ${x.sev}">${x.sev[0].toUpperCase() + x.sev.slice(1)}</span></td>
+        <td class="title"></td><td><span class="chip"></span></td><td class="num">${fmtIN(x.n)}</td>
+        <td>${x.who ? `<span class="avatar">${x.who}</span>` : '<span class="avatar none" title="Unassigned">?</span>'}</td>
+        <td><span class="pill ${x.st[0]}">${x.st[1]}</span></td>`;
+      tr.children[1].append(x.t, Object.assign(document.createElement("span"), { className: "sub", textContent: x.sub }));
+      tr.children[2].firstChild.textContent = x.tpl;
+      const open = () => openDrawer(x);
+      tr.addEventListener("click", open);
+      tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+      tb.appendChild(tr);
+    });
+    if (!rows.length) tb.innerHTML = '<tr><td colspan="6" class="dim" style="cursor:default">Nothing here. We\'ll keep checking every night.</td></tr>';
+    if (G() && !reduce()) G().fromTo($$("tr", tb).slice(0, 8), { autoAlpha: 0, y: 6 }, { autoAlpha: 1, y: 0, duration: 0.3, stagger: 0.04, ease: "power2.out", clearProps: "all" });
+  }
+  $$("[data-filter]").forEach((b) => b.addEventListener("click", () => {
+    filter = b.dataset.filter; $$("[data-filter]").forEach((o) => o.setAttribute("aria-pressed", String(o === b))); renderFixes();
+  }));
+  $("#fix-search").addEventListener("input", (e) => { query = e.target.value.trim().toLowerCase(); renderFixes(); });
+
+  /* ---------- drawer ---------- */
+  let lastFocus = null;
+  function openDrawer(x) {
+    lastFocus = document.activeElement;
+    $("#d-title").textContent = x.t;
+    const s = $("#d-sev"); s.className = "sev " + x.sev; s.textContent = x.sev[0].toUpperCase() + x.sev.slice(1);
+    $("#d-status").className = "pill " + x.st[0]; $("#d-status").textContent = x.st[1];
+    $("#d-what").textContent = `${fmtIN(x.n)} ${x.tpl.toLowerCase()} pages are affected. ${x.sub}.`;
+    $("#back").classList.add("on"); $("#drawer").classList.add("on");
+    if (G() && !reduce()) {
+      G().fromTo("#drawer", { x: 24, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.3, ease: "power3.out" });
+      G().fromTo("#back", { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.25 });
+    }
+    $("#d-close").focus();
+  }
+  function closeDrawer() {
+    $("#back").classList.remove("on"); $("#drawer").classList.remove("on");
+    if (lastFocus) lastFocus.focus();
+  }
+  $("#d-close").addEventListener("click", closeDrawer);
+  $("#back").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#drawer").classList.contains("on")) closeDrawer(); });
+  $("#d-owner").addEventListener("change", (e) => {
+    const v = e.target.value, av = $("#d-av");
+    av.textContent = v === "Unassigned" ? "?" : v.split(" ").map((p) => p[0]).join("");
+    av.className = "avatar" + (v === "Unassigned" ? " none" : "");
+    if (v !== "Unassigned") toast(`${v} now owns this fix. They'll get the details by e-mail.`);
+  });
+
+  /* ---------- live visitors (simulated) ---------- */
+  const PATHS = ["/personal-loan/pune", "/products/cast-iron-pan", "/branches/mumbai/andheri", "/articles/what-is-emi", "/home-loan/eligibility",
+    "/calculators/emi", "/insurance/health/family", "/fixed-deposit/rates", "/credit-card/compare", "/business-loan/gst"];
+  const ACTS = ["Loading", "Reading", "Scrolling", "Checking accessibility", "Measuring"];
+  let laneTimers = [];
+  function buildLanes() {
+    const box = $("#lanes"); box.innerHTML = "";
+    for (let i = 0; i < 8; i++) {
+      const mobile = i % 3 !== 0;
+      const el = document.createElement("div"); el.className = "lane";
+      el.innerHTML = `<svg aria-label="${mobile ? "Mobile" : "Desktop"} visitor"><use href="#i-${mobile ? "mobile" : "desktop"}"/></svg>
+        <span class="path"></span><span class="act"></span><span class="scroll" aria-hidden="true"><i></i></span>`;
+      box.appendChild(el);
+      cycleLane(el, i);
+    }
+  }
+  function cycleLane(el, i) {
+    const path = PATHS[(i * 3 + Math.floor(Math.random() * 10)) % PATHS.length];
+    el.querySelector(".path").textContent = path;
+    const act = el.querySelector(".act"), bar = el.querySelector(".scroll i");
+    let k = 0;
+    const step = () => {
+      if (!document.getElementById("v-live").classList.contains("on")) return;
+      act.textContent = ACTS[k];
+      if (G() && !reduce()) G().fromTo(act, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.2 });
+      if (ACTS[k] === "Scrolling") {
+        if (G() && !reduce()) G().fromTo(bar, { width: "0%" }, { width: "100%", duration: 2.4, ease: "steps(5)" });
+        else bar.style.width = "100%";
+      }
+      if (ACTS[k] === "Loading") bar.style.width = "0%";
+      k += 1;
+      if (k < ACTS.length) laneTimers.push(setTimeout(step, 900 + Math.random() * 1600));
+      else laneTimers.push(setTimeout(() => cycleLane(el, i), 1200 + Math.random() * 2000));
+    };
+    laneTimers.push(setTimeout(step, Math.random() * 1500));
+  }
+  let doneTimer = null, done = 124500;
+  function startLive() {
+    buildLanes();
+    clearInterval(doneTimer);
+    doneTimer = setInterval(() => {
+      done = Math.min(300000, done + 27 + Math.floor(Math.random() * 5));
+      $("#live-done").textContent = fmtIN(done);
+      $("#live-bar").style.width = (done / 3000).toFixed(2) + "%";
+    }, 1000);
+  }
+  function stopLive() { laneTimers.forEach(clearTimeout); laneTimers = []; clearInterval(doneTimer); }
+
+  /* ---------- integrations ---------- */
+  const INTS = [
+    ["Chrome real-user speed", "Speed and layout shift from real Chrome visitors (CrUX).", "Connected", "good", "Page · Experience"],
+    ["Google Search Console", "Clicks, impressions and whether Google indexed each page.", "Connected", "good", "Fixes · impact, Page"],
+    ["Google Analytics 4", "Which pages people visit, so we sample and order fixes by traffic.", "Needs a key", "warn", "Visit plan, Fixes"],
+    ["Bing Webmaster Tools", "Links from other sites and Bing's crawl problems.", "Not connected", "", "Site overview"],
+    ["IndexNow", "Tells Bing and others when a fix is live, so they re-check sooner.", "Connected", "good", "Fix → Verified"],
+    ["Wayback Machine", "When a page changed, and what it looked like before.", "Connected", "good", "Page · History"],
+    ["Accessibility (axe)", "WCAG checks inside every real-visitor visit.", "Built in", "good", "Page, Fixes"],
+    ["Lighthouse", "Lab performance on one page per page type, no quota.", "Built in", "good", "Templates"],
+    ["GitHub Issues", "Turn a fix into an issue and follow its status.", "Connected", "good", "Fixes"],
+  ];
+  function renderInts() {
+    const box = $("#ints"); box.innerHTML = "";
+    INTS.forEach(([n, d, s, c, where]) => {
+      const el = document.createElement("div"); el.className = "panel int"; el.dataset.item = "";
+      el.innerHTML = `<div class="row"><h3></h3><span class="pill ${c}">${s}</span></div><p></p>
+        <span class="faint" style="font-size:12.5px">Shows up in: ${where} · Free</span>
+        <div><button class="btn" type="button">${s === "Not connected" || s === "Needs a key" ? "Connect" : "Settings"}</button></div>`;
+      el.querySelector("h3").textContent = n; el.querySelector("p").textContent = d;
+      el.querySelector("button").addEventListener("click", () => toast(s === "Not connected" || s === "Needs a key"
+        ? `Connecting ${n}: 3 steps with copyable values and a test button.` : `${n} settings`));
+      box.appendChild(el);
+    });
+  }
+
+  /* ---------- spec ---------- */
+  let specLoaded = false;
+  async function loadSpec() {
+    if (specLoaded) return;
+    const box = $("#spec-body");
+    try {
+      const r = await fetch("DESIGN_SPEC.md"); if (!r.ok) throw new Error("HTTP " + r.status);
+      const html = window.marked ? marked.parse(await r.text(), { gfm: true }) : "<p>Spec text unavailable.</p>";
+      box.innerHTML = window.DOMPurify ? DOMPurify.sanitize(html) : html;
+      $$("table", box).forEach((t) => { const w = document.createElement("div"); w.className = "table-wrap"; t.replaceWith(w); w.appendChild(t); });
+      $$("a[href$='.md']", box).forEach((a) => { a.removeAttribute("href"); a.title = "In the repository: docs/blueprint/"; });
+      specLoaded = true;
+    } catch (e) {
+      box.innerHTML = '<h1>Design spec</h1><p>The spec could not be loaded here. It is in the repository at docs/blueprint/DESIGN_SPEC.md.</p>';
+    }
+  }
+
+  /* ---------- router ---------- */
+  const VIEWS = ["today", "live", "fixes", "page", "journeys", "integrations", "spec"];
+  function show() {
+    const v = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "today";
+    ctx?.revert(); stopLive();
+    VIEWS.forEach((x) => document.getElementById("v-" + x).classList.toggle("on", x === v));
+    $$("a.nav").forEach((a) => a.setAttribute("aria-current", a.dataset.v === v ? "page" : "false"));
+    if (v === "fixes") renderFixes();
+    if (v === "live") startLive();
+    if (v === "integrations") renderInts();
+    if (v === "spec") loadSpec();
+    const scr = document.getElementById("v-" + v);
+    if (G() && !reduce()) {
+      ctx = G().context(() => {
+        G().fromTo(scr, { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.28, ease: "power2.out", clearProps: "all" });
+        const items = $$("[data-anim], [data-item]", scr).slice(0, 8);
+        if (items.length) G().fromTo(items, { autoAlpha: 0, y: 10 }, { autoAlpha: 1, y: 0, duration: 0.32, stagger: 0.04, ease: "power2.out", delay: 0.05, clearProps: "all" });
+        $$("[data-count]", scr).forEach((el) => {
+          const o = { v: Number(el.dataset.count) - 6 };
+          G().to(o, { v: Number(el.dataset.count), duration: 0.6, ease: "power1.out", onUpdate: () => { el.textContent = Math.round(o.v); } });
+        });
+      }, scr);
+    }
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener("hashchange", show);
+  show();
+})();
+</script>
