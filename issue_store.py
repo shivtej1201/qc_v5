@@ -117,7 +117,15 @@ def ensure_issue_schema(conn: sqlite3.Connection):
 
 
 class IssueSink:
-    """Batched INSERT OR IGNORE of issues for one job (dedup by issue_key). Re-running replaces the job's rows."""
+    """Batched INSERT OR IGNORE of issues for one job (dedup by issue_key). Re-running replaces the job's rows.
+
+    Rows are first spooled into a TEMP table (temp store, outside the main database and its WAL) and moved into
+    on_page_issues in ONE transaction by publish()/stored(). The packager adds issues while it streams CSV rows from
+    a long-running SELECT on the same connection; that open read stops SQLite from resetting the WAL, so committing
+    straight into the indexed table every batch appended fresh copies of the same index pages each time (300K pages /
+    1.6M issues: the WAL reached 9.6 GB in under two minutes and filled the disk)."""
+
+    _SPOOL = "temp.qc_issue_spool"
 
     def __init__(self, conn: sqlite3.Connection, job_id: str, batch: int = 5000):
         self.conn, self.job_id, self.batch = conn, job_id, batch
@@ -126,6 +134,8 @@ class IssueSink:
         ensure_issue_schema(conn)
         with conn:
             conn.execute("DELETE FROM on_page_issues WHERE job_id = ?", (job_id,))
+            conn.execute(f"DROP TABLE IF EXISTS {self._SPOOL}")
+            conn.execute(f"CREATE TEMP TABLE {self._SPOOL.split('.')[1]} ({', '.join(ISSUE_COLUMNS)})")
 
     def add(self, category: str, rule: str, sev: str, detail: str, page: str, element: Any, found: Any, norm: Any,
             text: Any, location: Any, status: Any, initial: Any, final: Any, hops: Any, vsrc: Any):
@@ -139,15 +149,25 @@ class IssueSink:
             self.flush()
 
     def flush(self):
+        """Move buffered rows to the temp spool (no main-database write)."""
         if self.buf:
             with self.conn:
                 self.conn.executemany(
-                    f"INSERT OR IGNORE INTO on_page_issues ({', '.join(ISSUE_COLUMNS)}) "
+                    f"INSERT INTO {self._SPOOL} ({', '.join(ISSUE_COLUMNS)}) "
                     f"VALUES ({', '.join('?' * len(ISSUE_COLUMNS))})", self.buf)
             self.buf = []
 
-    def stored(self) -> int:
+    def publish(self):
+        """Copy the spool into on_page_issues in one transaction (first row per issue_key wins, in arrival order).
+        Call when no long-running read is open on the connection."""
         self.flush()
+        cols = ", ".join(ISSUE_COLUMNS)
+        with self.conn:
+            self.conn.execute(f"INSERT OR IGNORE INTO on_page_issues ({cols}) SELECT {cols} FROM {self._SPOOL} ORDER BY rowid")
+            self.conn.execute(f"DELETE FROM {self._SPOOL}")
+
+    def stored(self) -> int:
+        self.publish()
         return self.conn.execute("SELECT COUNT(*) FROM on_page_issues WHERE job_id = ?", (self.job_id,)).fetchone()[0]
 
 
