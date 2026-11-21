@@ -20,8 +20,8 @@ if not "%QC6_DATABASE_URL%"=="" goto have_db
 echo.
 echo QC V6 keeps its data in PostgreSQL. Enter the password you chose for the "postgres" user
 echo when you installed PostgreSQL. The "qc6" database is created for you.
-set /p "PGPASS=PostgreSQL password: "
-set "QC6_DATABASE_URL=postgresql://postgres:%PGPASS%@127.0.0.1:5432/qc6"
+set /p "QC6_DB_PASSWORD=PostgreSQL password: "
+set "QC6_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/qc6"
 :have_db
 
 REM ---- first start: virtual environment, packages, Chromium

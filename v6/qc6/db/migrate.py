@@ -56,5 +56,27 @@ async def migrate(dsn: Optional[str] = None) -> list[str]:
     return applied
 
 
+def _explain(e: BaseException, dsn: str) -> str:
+    import socket
+    import urllib.parse
+    import asyncpg
+    u = urllib.parse.urlsplit(dsn)
+    where = f"{u.hostname}:{u.port or 5432}"
+    if isinstance(e, socket.gaierror):
+        return (f"The database address points at a computer called {u.hostname!r}, which doesn't exist. "
+                "Check QC6_DATABASE_URL, or set the password on its own with QC6_DB_PASSWORD.")
+    if isinstance(e, (ConnectionRefusedError, ConnectionError)) or (isinstance(e, OSError) and not isinstance(e, asyncpg.PostgresError)):
+        return f"Nothing answered at {where}. Is PostgreSQL installed and running (Windows: Services > postgresql)?"
+    if isinstance(e, asyncpg.InvalidPasswordError):
+        return f"PostgreSQL at {where} said the password for user {u.username!r} is wrong."
+    return f"Could not use the database at {where}: {e}"
+
+
 if __name__ == "__main__":
-    print("applied:", asyncio.run(migrate()) or "nothing (up to date)")
+    import sys
+    from qc6.settings import settings
+    try:
+        print("applied:", asyncio.run(migrate()) or "nothing (up to date)")
+    except Exception as e:  # noqa: BLE001 - one plain sentence instead of a traceback on first start
+        print("\n" + _explain(e, settings.database_url), file=sys.stderr)
+        sys.exit(1)

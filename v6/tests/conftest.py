@@ -3,7 +3,9 @@ import os
 
 import pytest
 
-TEST_DSN = os.environ.get("QC6_TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5433/qc6_test")
+from qc6.settings import clean_dsn  # noqa: E402
+
+TEST_DSN = clean_dsn(os.environ.get("QC6_TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5433/qc6_test"))
 os.environ.setdefault("QC6_DATABASE_URL", TEST_DSN)
 
 
