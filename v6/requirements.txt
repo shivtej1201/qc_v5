@@ -1,0 +1,18 @@
+# Exact versions QC V6 was tested with (37 tests, real Chromium + Postgres 16).
+fastapi==0.164.0
+uvicorn==0.54.0
+asyncpg==0.32.0
+httpx==0.28.1
+playwright==1.63.0
+pyyaml==6.0.3
+duckdb==2.0.1
+pyarrow==26.0.1
+pillow==12.3.0
+cryptography==50.0.1
+pydantic==2.13.5
+pydantic-settings==2.16.3
+psutil==7.2.2
+python-dateutil==2.9.0.post0
+openpyxl==3.1.5
+python-multipart==0.0.32
+pytest==9.1.1

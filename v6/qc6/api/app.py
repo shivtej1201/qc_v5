@@ -82,6 +82,12 @@ async def current_member(request: Request) -> Dict[str, Any]:
             raise problem(403, "You're signed in but not a member here", f"Ask a workspace owner to add {email}.")
     elif mode == "dev":
         m = await pool.fetchrow("SELECT * FROM members WHERE role = 'owner' ORDER BY id LIMIT 1")
+        if m is None and not await pool.fetchval("SELECT EXISTS (SELECT 1 FROM members)"):
+            # first start on this machine: create a workspace and its owner so the app opens straight to "Add a site"
+            await services.create_workspace(pool, os.environ.get("QC6_WORKSPACE", "My workspace"),
+                                            os.environ.get("QC6_OWNER_EMAIL", "owner@localhost"),
+                                            os.environ.get("QC6_OWNER_NAME", "Owner"))
+            m = await pool.fetchrow("SELECT * FROM members WHERE role = 'owner' ORDER BY id LIMIT 1")
     else:
         m = None
     if m is None:
