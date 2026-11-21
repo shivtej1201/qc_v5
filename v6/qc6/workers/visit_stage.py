@@ -15,7 +15,7 @@ SERIOUS = {"serious", "critical"}
 
 
 async def plan(pool, run_id: int, per_template: int = 25, mobile_share: float = 0.6, seed: int = 11,
-               max_visits: int = 10_000) -> List[VisitTarget]:
+               max_visits: int = 10_000, traffic: Optional[Dict[str, int]] = None) -> List[VisitTarget]:
     """Every template gets up to `per_template` pages (random but reproducible), plus every page the server HTML
     marks as a likely JavaScript shell. Device per visit follows the mobile share (from GA4 when connected)."""
     rng = random.Random(seed)
@@ -25,8 +25,15 @@ async def plan(pool, run_id: int, per_template: int = 25, mobile_share: float = 
     for r in rows:
         by_tpl[r["template_id"]].append(r)
     chosen, seen = [], set()
+    import urllib.parse as _up
+    traffic = traffic or {}
     for tpl, rs in sorted(by_tpl.items(), key=lambda kv: -len(kv[1])):
-        for r in rng.sample(rs, min(per_template, len(rs))):
+        # pages people actually land on first (GA4), the rest of the sample at random, so rare pages still get seen
+        busy = sorted((r for r in rs if traffic.get(_up.urlsplit(r["url"]).path, 0) > 0),
+                      key=lambda r: -traffic[_up.urlsplit(r["url"]).path])
+        top = busy[: (per_template + 1) // 2]
+        rest = [r for r in rs if r not in top]
+        for r in top + rng.sample(rest, min(per_template - len(top), len(rest))):
             chosen.append(r)
             seen.add(r["url"])
     for r in rows:
@@ -132,8 +139,15 @@ def _p75(vals: List[float]) -> float:
 
 async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts: Dict[str, Any],
                           control: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    targets = await plan(pool, run_id, per_template=int(opts.get("per_template", 25)),
-                         mobile_share=float(site["settings"].get("mobile_share", 0.6)))
+    ga = None
+    try:
+        from qc6 import ga4
+        ga = await ga4.traffic(site)
+    except Exception:
+        ga = None                                  # GA4 is optional; the plan falls back to random sampling
+    mobile_share = (ga or {}).get("mobile_share") or float(site["settings"].get("mobile_share", 0.6))
+    targets = await plan(pool, run_id, per_template=int(opts.get("per_template", 25)), mobile_share=mobile_share,
+                         traffic=(ga or {}).get("paths"))
     already = {(r["page_url"], r["device"]) for r in await pool.fetch(
         "SELECT page_url, device FROM visits WHERE run_id = $1 AND status IN ('ok','failed')", run_id)}
     targets = [t for t in targets if (t.url, t.device) not in already]      # resume: skip pages already visited

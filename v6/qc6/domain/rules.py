@@ -134,6 +134,26 @@ _r("JOURNEY_FAILED", "subject", "critical", "experience",
    "Open the failed step: it shows what happened, the screenshot and the browser errors.",
    "The journey passes on its next scheduled run.")
 
+# ---- extra free checks (self-hosted Nu HTML checker, LanguageTool, local Lighthouse) ----------------------------
+_r("HTML_INVALID", "template", "low", "technical",
+   "{template} have {value} markup errors",
+   "Broken markup can make browsers, screen readers and search engines read the page differently from what you intended.",
+   "Fix the first errors in the {template} template; the checker lists the line and the problem: {subject}")
+_r("SPELLING", "template", "low", "content",
+   "{template} have spelling or grammar mistakes ({value})",
+   "Mistakes in headings and key text make the brand look careless and can confuse readers.",
+   "Correct the text in the CMS or the {template} template. First ones found: {subject}")
+_r("LAB_PERFORMANCE", "template", "medium", "performance",
+   "{template} score {value} out of 100 for speed in a lab test",
+   "A slow lab score usually means visitors on mid-range phones wait too long for the page.",
+   "Open the Lighthouse report for one page of this type and start with the largest savings: {subject}",
+   "The lab score reaches 90 or more.")
+_r("LAB_ACCESSIBILITY", "template", "medium", "experience",
+   "{template} score {value} out of 100 for accessibility in a lab test",
+   "Parts of the page are hard or impossible to use with a screen reader, keyboard or low vision.",
+   "Fix the failed checks listed in the Lighthouse report: {subject}",
+   "The lab score reaches 90 or more.")
+
 # ---- checks carried over from the V5 page check without a dedicated V6 text yet ------------------------------------
 _r("PAGE_CHECK", "template", "medium", "content",
    "{n_pages} {template}: {value}",

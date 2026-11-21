@@ -156,6 +156,12 @@ async def execute_run(pool, run_id: int, browser=None, fast_journeys: bool = Fal
             if part.get("paused") or control["pause"]:
                 return await paused()
             await stage_done("visits", part)
+        if kind == "full" and "extras" not in done_stages:
+            from qc6.workers import extras
+            if any(extras.configured().values()):
+                if control["pause"]:
+                    return await paused()
+                await stage_done("extras", await extras.run_extras(pool, run_id, site))
         if kind in ("journey", "full") and "journeys" not in done_stages:
             if control["pause"]:
                 return await paused()
