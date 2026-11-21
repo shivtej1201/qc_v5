@@ -72,6 +72,12 @@ def parse(source_yaml: str) -> Dict[str, Any]:
         raise SpecError("A journey needs a name and at least one step.")
     if spec.get("device", "desktop") not in DEVICES:
         raise SpecError("device must be desktop or mobile.")
+    if spec.get("schedule"):
+        from qc6.scheduler import ScheduleError, parse as parse_schedule
+        try:
+            parse_schedule(str(spec["schedule"]))
+        except ScheduleError as e:
+            raise SpecError(str(e)) from None
     for i, st in enumerate(spec["steps"], 1):
         if not isinstance(st, dict):
             raise SpecError(f"Step {i} must be a mapping like '- click: ...'.")

@@ -93,7 +93,20 @@ def can_edit(me) -> None:
 
 
 def public_site(s: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in s.items() if k != "access_token"}
+    from qc6.notify import mask
+    out = {k: v for k, v in s.items() if k != "access_token"}
+    st = dict(out.get("settings") or {})
+    if st.get("alerts"):
+        al = dict(st["alerts"])
+        for ch in ("slack", "teams"):
+            if al.get(f"{ch}_webhook"):
+                al[f"{ch}_webhook"] = mask(al[f"{ch}_webhook"])
+        st["alerts"] = al
+    for k in ("github_token", "jira_token"):
+        if st.get(k):
+            st[k] = "set"
+    out["settings"] = st
+    return out
 
 
 def fix_out(f) -> Dict[str, Any]:
@@ -154,6 +167,102 @@ async def create_site(body: SiteIn, me=Depends(current_member)):
 @app.get("/api/v2/sites/{site_id}")
 async def site(site_id: int, me=Depends(current_member)):
     return public_site(await site_for(site_id, me))
+
+
+class SitePatch(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=120)
+    rate_rps: Optional[float] = Field(default=None, gt=0, le=200)
+    visitors: Optional[int] = Field(default=None, ge=1, le=20)
+    mobile_share: Optional[float] = Field(default=None, ge=0, le=1)
+    consent: Optional[str] = None
+    check_schedule: Optional[str] = Field(default=None, max_length=60)
+    sitemap: Optional[str] = Field(default=None, max_length=500)
+    alerts: Optional[Dict[str, Any]] = None
+    tickets: Optional[Dict[str, Any]] = None
+
+
+@app.patch("/api/v2/sites/{site_id}")
+async def patch_site(site_id: int, body: SitePatch, me=Depends(current_member)):
+    can_edit(me)
+    s = await site_for(site_id, me)
+    st = dict(s["settings"] or {})
+    if body.consent is not None and body.consent not in ("accept", "reject"):
+        raise problem(400, "Cookie banner choice must be accept or reject")
+    if body.check_schedule is not None:
+        from qc6.scheduler import ScheduleError, parse as parse_schedule
+        try:
+            parse_schedule(body.check_schedule)
+        except ScheduleError as e:
+            raise problem(400, "Check the schedule", str(e))
+    if body.alerts is not None:
+        from qc6.notify import valid_webhook
+        al = dict(st.get("alerts") or {})
+        for ch in ("slack", "teams"):
+            v = body.alerts.get(f"{ch}_webhook")
+            if v is None or (isinstance(v, str) and "…" in v):
+                continue                                   # unchanged (the API only ever shows a masked value)
+            if v == "":
+                al.pop(f"{ch}_webhook", None)
+            elif not valid_webhook(ch, v):
+                raise problem(400, f"That isn't a {ch.title()} incoming webhook address",
+                              "Copy the webhook URL from the channel's Incoming Webhooks setting.")
+            else:
+                al[f"{ch}_webhook"] = v
+        if "on" in body.alerts:
+            al["on"] = [k for k in body.alerts["on"] if k in ("summary", "regressed", "journey_failed", "access")]
+        st["alerts"] = al
+    if body.tickets is not None:
+        from qc6.tickets import clean_config
+        try:
+            st["tickets"] = clean_config({**(st.get("tickets") or {}), **body.tickets})
+        except ValueError as e:
+            raise problem(400, "Check the ticket settings", str(e))
+    for k in ("rate_rps", "visitors", "mobile_share", "consent", "check_schedule", "sitemap"):
+        v = getattr(body, k)
+        if v is not None:
+            st[k] = v
+    pool = await get_pool()
+    await pool.execute("UPDATE sites SET settings = $2, name = COALESCE($3, name) WHERE id = $1", site_id, st, body.name)
+    await services.log(pool, me["workspace_id"], me["id"], "site.update", f"site:{site_id}",
+                       {k: v for k, v in body.model_dump(exclude_none=True).items() if k not in ("alerts", "tickets")})
+    return public_site(await site_for(site_id, me))
+
+
+@app.post("/api/v2/sites/{site_id}/alerts/test")
+async def test_alert(site_id: int, me=Depends(current_member)):
+    can_edit(me)
+    s = await site_for(site_id, me)
+    from qc6 import notify
+    cfg = (s["settings"] or {}).get("alerts") or {}
+    sent = []
+    for ch in ("slack", "teams"):
+        url = cfg.get(f"{ch}_webhook")
+        if url and notify.valid_webhook(ch, url):
+            try:
+                status = await notify._post(ch, url, f"{s['name']}: test alert from QC", ["If you can read this, alerts work."])
+                sent.append({"channel": ch, "ok": 200 <= status < 300, "status": status})
+            except httpx.HTTPError as e:
+                sent.append({"channel": ch, "ok": False, "error": type(e).__name__})
+    if not sent:
+        raise problem(400, "No alert channel set", "Add a Slack or Teams webhook first.")
+    return {"sent": sent}
+
+
+class RecordingIn(BaseModel):
+    code: str = Field(min_length=10, max_length=50_000)
+    name: str = Field(min_length=1, max_length=120)
+    device: str = "desktop"
+
+
+@app.post("/api/v2/sites/{site_id}/journeys/convert")
+async def convert_recording(site_id: int, body: RecordingIn, me=Depends(current_member)):
+    await site_for(site_id, me)
+    from qc6.recorder import convert
+    from qc6.workers.journey import SpecError
+    try:
+        return convert(body.code, body.name, body.device)
+    except SpecError as e:
+        raise problem(400, "The recording couldn't be turned into a journey", str(e))
 
 
 # ------------------------------------------------------------------ today
@@ -284,6 +393,52 @@ async def patch_fix(fix_id: int, body: FixPatch, me=Depends(current_member)):
     except services.NotAllowed as e:
         raise problem(409, "That change isn't possible", str(e))
     return fix_out(f)
+
+
+@app.post("/api/v2/fixes/{fix_id}/ticket")
+async def create_ticket(fix_id: int, request: Request, me=Depends(current_member)):
+    """Create a GitHub issue / Jira ticket for a fix. When the ticket is closed there, the fix moves to
+    'fixed — waiting for check' (see /ticket/sync); only the next check can verify it."""
+    can_edit(me)
+    pool = await get_pool()
+    f = await pool.fetchrow("SELECT f.* FROM fixes f JOIN sites s ON s.id = f.site_id WHERE f.id = $1 AND s.workspace_id = $2",
+                            fix_id, me["workspace_id"])
+    if f is None:
+        raise problem(404, "Fix not found")
+    if f["ticket_url"]:
+        raise problem(409, "This fix already has a ticket", f["ticket_url"])
+    s = dict(await pool.fetchrow("SELECT * FROM sites WHERE id = $1", f["site_id"]))
+    pages = [r["page_url"] for r in await pool.fetch("SELECT DISTINCT page_url FROM findings WHERE fix_id = $1 AND run_id = $2 LIMIT 10",
+                                                     fix_id, f["last_seen_run"])]
+    from qc6 import tickets
+    link = str(request.base_url).rstrip("/") + f"/#/fixes?fix={fix_id}"
+    try:
+        t = await tickets.create((s["settings"] or {}).get("tickets") or {}, dict(f), s, pages, link)
+    except ValueError as e:
+        raise problem(400, "The ticket wasn't created", str(e))
+    except httpx.HTTPError as e:
+        raise problem(502, "The ticket service didn't answer", type(e).__name__)
+    await pool.execute("UPDATE fixes SET ticket_key = $2 WHERE id = $1", fix_id, t["key"])
+    await services.update_fix(pool, fix_id, me["id"], ticket_url=t["url"])
+    return t
+
+
+@app.post("/api/v2/sites/{site_id}/tickets/sync")
+async def sync_tickets(site_id: int, me=Depends(current_member)):
+    """Read the state of every linked ticket; closed ones move their fix to 'fixed — waiting for check'."""
+    can_edit(me)
+    s = await site_for(site_id, me)
+    pool = await get_pool()
+    from qc6 import tickets
+    moved = 0
+    for f in await pool.fetch("SELECT id, status, ticket_key FROM fixes WHERE site_id = $1 AND ticket_key IS NOT NULL "
+                              "AND status IN ('open','in_progress')", site_id):
+        st = await tickets.state((s["settings"] or {}).get("tickets") or {}, f["ticket_key"])
+        if st == "done":
+            await services.update_fix(pool, f["id"], me["id"], status="fixed_pending_check",
+                                      comment=f"Ticket {f['ticket_key']} was closed.")
+            moved += 1
+    return {"moved_to_waiting": moved}
 
 
 # ------------------------------------------------------------------ runs + live stream

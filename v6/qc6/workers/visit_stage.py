@@ -86,6 +86,38 @@ def findings_from(results: List[VisitResult], host: str) -> Dict[str, Any]:
             "challenged": len(challenged), "failed": sum(1 for r in results if r.status == "failed")}
 
 
+async def visual_changes(pool, run_id: int, site_id: int, threshold: float = 0.15) -> List[Dict[str, Any]]:
+    """Compare each visit's screenshot with the same page and device from the site's previous check. Store the
+    changed share per visit; report page types where the median page changed by more than `threshold`."""
+    import os
+    from qc6.domain.visual import changed_ratio
+    rows = await pool.fetch("""
+        SELECT v.id, v.template_id, v.screenshot, prev.screenshot AS prev_shot
+          FROM visits v
+          JOIN LATERAL (SELECT p.screenshot FROM visits p JOIN runs r ON r.id = p.run_id
+                         WHERE r.site_id = $2 AND p.run_id < $1 AND p.page_url = v.page_url AND p.device = v.device
+                           AND p.status = 'ok' AND p.screenshot IS NOT NULL ORDER BY p.id DESC LIMIT 1) prev ON true
+         WHERE v.run_id = $1 AND v.status = 'ok' AND v.screenshot IS NOT NULL""", run_id, site_id)
+    by_tpl: Dict[Optional[int], List[float]] = defaultdict(list)
+    for r in rows:
+        a, b = (os.path.join(settings.objects_dir, x) for x in (r["prev_shot"], r["screenshot"]))
+        if not (os.path.exists(a) and os.path.exists(b)):
+            continue
+        try:
+            ratio = round(changed_ratio(a, b), 4)
+        except Exception:
+            continue
+        await pool.execute("UPDATE visits SET visual_change = $2 WHERE id = $1", r["id"], ratio)
+        by_tpl[r["template_id"]].append(ratio)
+    out = []
+    names = {t["id"]: t["name"] for t in await pool.fetch("SELECT id, name FROM templates WHERE site_id = $1", site_id)}
+    for tpl, vals in by_tpl.items():
+        med = sorted(vals)[len(vals) // 2]
+        if med > threshold:
+            out.append({"template_id": tpl, "template": names.get(tpl, "Pages"), "changed": med, "pages_compared": len(vals)})
+    return sorted(out, key=lambda x: -x["changed"])
+
+
 async def _all_results(pool, run_id: int) -> List[VisitResult]:
     rows = await pool.fetch("SELECT * FROM visits WHERE run_id = $1", run_id)
     return [VisitResult(r["page_url"], r["device"], r["template_id"], r["status"], r["http_status"], dict(r["vitals"]),
@@ -145,6 +177,7 @@ async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts
         return {"paused": True}
     if already:                                          # resumed: judge templates on every visit of this run
         results = await _all_results(pool, run_id)
+    changed = await visual_changes(pool, run_id, site["id"])
     f = findings_from(results, site["primary_host"])
     tpl_rows = await pool.fetch("SELECT id, name, page_count FROM templates WHERE site_id = $1 AND id = ANY($2::bigint[])",
                                 site["id"], [t for t in {r.template_id for r in results} if t is not None])
@@ -152,6 +185,6 @@ async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts
                           template_pages={r["id"]: r["page_count"] for r in tpl_rows},
                           template_names={r["id"]: r["name"] for r in tpl_rows}, project_templates=True)
     moved = await close_run(pool, run_id, site["id"], ["visit"], complete=f["challenged"] == 0)
-    return {"visits_planned": len(targets), "visited": f["visited"], "templates_visited": f["templates"],
+    return {"templates_changed": changed, "visits_planned": len(targets), "visited": f["visited"], "templates_visited": f["templates"],
             "challenged": f["challenged"], "visits_failed": f["failed"], **{f"visit_{k}": v for k, v in applied.items()},
             "visit_lifecycle": moved}

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import traceback
 from typing import Any, Dict, List, Optional
 
@@ -47,9 +48,12 @@ async def discover_urls(site: Dict[str, Any], opts: Dict[str, Any]) -> List[str]
     return [u["normalized_url"] for u in res.get("unique_urls", [])][: int(opts.get("max_pages", 300_000))]
 
 
-async def journey_stage(pool, browser, run_id: int, site: Dict[str, Any], fast: bool = False) -> Dict[str, Any]:
+async def journey_stage(pool, browser, run_id: int, site: Dict[str, Any], fast: bool = False,
+                        opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from qc6.workers.journey import JourneyRunner
-    rows = await pool.fetch("SELECT id, name, spec FROM journeys WHERE site_id = $1 AND enabled ORDER BY id", site["id"])
+    ids = (opts or {}).get("journey_ids")
+    rows = await pool.fetch("SELECT id, name, spec FROM journeys WHERE site_id = $1 AND enabled AND ($2::bigint[] IS NULL OR id = ANY($2::bigint[])) "
+                            "ORDER BY id", site["id"], ids)
     from qc6.crawl.budget import HostBudget
     rate = float((site.get("settings") or {}).get("rate_rps", 12))
     await HostBudget.ensure(pool, site["primary_host"], rate_rps=rate, burst=max(2.0, rate))
@@ -155,7 +159,7 @@ async def execute_run(pool, run_id: int, browser=None, fast_journeys: bool = Fal
         if kind in ("journey", "full") and "journeys" not in done_stages:
             if control["pause"]:
                 return await paused()
-            part = await journey_stage(pool, browser, run_id, site, fast=fast_journeys or opts.get("fast_journeys", False))
+            part = await journey_stage(pool, browser, run_id, site, fast=fast_journeys or opts.get("fast_journeys", False), opts=opts)
             await stage_done("journeys", part)
         pages_total = await pool.fetchval("SELECT COUNT(*) FROM pages WHERE run_id = $1", run_id) or \
             await pool.fetchval("SELECT COUNT(*) FROM pages WHERE run_id = (SELECT MAX(id) FROM runs WHERE site_id = $1 "
@@ -190,9 +194,18 @@ async def after_run_hooks(pool, run_id: int, site: Dict[str, Any], summary: Dict
 
 
 async def worker_loop(poll_s: float = 2.0) -> None:
+    from qc6 import scheduler
     pool = await get_pool()
     log.info("worker %s ready", settings.worker_id)
+    last_tick = 0.0
     while True:
+        if time.monotonic() - last_tick >= 60:
+            last_tick = time.monotonic()
+            try:
+                for st in await scheduler.tick(pool):
+                    log.info("schedule %s started run %s", st["key"], st["run_id"])
+            except Exception:
+                log.warning("scheduler tick failed: %s", traceback.format_exc())
         run_id = await pool.fetchval(CLAIM_SQL)
         if run_id is None:
             await asyncio.sleep(poll_s)
