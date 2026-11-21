@@ -3,9 +3,7 @@ import os
 
 import pytest
 
-from qc6.settings import clean_dsn  # noqa: E402
-
-TEST_DSN = clean_dsn(os.environ.get("QC6_TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5433/qc6_test"))
+TEST_DSN = os.environ.get("QC6_TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5433/qc6_test")
 os.environ.setdefault("QC6_DATABASE_URL", TEST_DSN)
 
 
@@ -13,17 +11,19 @@ os.environ.setdefault("QC6_DATABASE_URL", TEST_DSN)
 def migrated():
     import asyncpg
     from qc6.db.migrate import migrate
+    from qc6.settings import clean_dsn  # imported here: test modules set QC6_* before settings are read
+    dsn = clean_dsn(TEST_DSN)
 
     async def reset():
-        conn = await asyncpg.connect(TEST_DSN)
+        conn = await asyncpg.connect(dsn)
         await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         await conn.close()
-        await migrate(TEST_DSN)
+        await migrate(dsn)
     try:
         asyncio.run(reset())
     except OSError as e:
-        pytest.skip(f"Postgres not reachable at {TEST_DSN}: {e}")
-    return TEST_DSN
+        pytest.skip(f"Postgres not reachable: {e}")
+    return dsn
 
 
 @pytest.fixture
