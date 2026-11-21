@@ -10,7 +10,33 @@ from qc6.db.pool import connect
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 
 
+async def ensure_database(dsn: str) -> bool:
+    """Create the database named in the DSN if it doesn't exist yet (first start). True if it was created."""
+    import urllib.parse
+    import asyncpg
+    try:
+        conn = await asyncpg.connect(dsn)
+        await conn.close()
+        return False
+    except asyncpg.InvalidCatalogNameError:
+        pass
+    u = urllib.parse.urlsplit(dsn)
+    name = u.path.lstrip("/")
+    if not name or not name.replace("_", "").isalnum():
+        raise ValueError(f"Database name {name!r} must be letters, digits and underscores.")
+    admin = urllib.parse.urlunsplit((u.scheme, u.netloc, "/postgres", u.query, ""))
+    conn = await asyncpg.connect(admin)
+    try:
+        await conn.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await conn.close()
+    return True
+
+
 async def migrate(dsn: Optional[str] = None) -> list[str]:
+    from qc6.settings import settings
+    if await ensure_database(dsn or settings.database_url):
+        print(f"Created database {(dsn or settings.database_url).rsplit('/', 1)[-1]}")
     conn = await connect(dsn)
     applied = []
     try:
