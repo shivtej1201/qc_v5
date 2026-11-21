@@ -30,7 +30,7 @@ import yaml
 
 from qc6.crawl.pacing import Pacer, Persona
 from qc6.settings import settings
-from qc6.workers.visit import DEVICES, VITALS_HOOK
+from qc6.workers.visit import DEVICES, VITALS_HOOK, make_route_guard
 
 ACTIONS = {"open", "click", "fill", "select", "wait", "stop_before"}
 IRREVERSIBLE = re.compile(r"\b(submit|pay( now)?|place order|buy now|confirm|apply now|delete|remove|transfer|"
@@ -124,8 +124,9 @@ def _locator(page, sel: str):
 
 
 class JourneyRunner:
-    def __init__(self, browser, site: Dict[str, Any], objects_dir: str, seed: int = 5, fast: bool = False):
+    def __init__(self, browser, site: Dict[str, Any], objects_dir: str, seed: int = 5, fast: bool = False, budget=None):
         self.browser, self.site, self.objects_dir, self.seed, self.fast = browser, site, objects_dir, seed, fast
+        self.budget = budget
 
     def _persona(self, spec) -> Persona:
         p = spec.get("persona") or {}
@@ -143,6 +144,7 @@ class JourneyRunner:
         ctx = await self.browser.new_context(**DEVICES[device], extra_http_headers={settings.access_header: self.site["access_token"]},
                                              locale="en-IN", timezone_id="Asia/Kolkata", accept_downloads=False)
         await ctx.add_init_script(VITALS_HOOK)
+        await ctx.route("**/*", make_route_guard(self.site, self.budget))
         page = await ctx.new_page()
         ua = await page.evaluate("navigator.userAgent")
         await ctx.set_extra_http_headers({settings.access_header: self.site["access_token"],

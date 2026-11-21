@@ -86,14 +86,25 @@ def findings_from(results: List[VisitResult], host: str) -> Dict[str, Any]:
             "challenged": len(challenged), "failed": sum(1 for r in results if r.status == "failed")}
 
 
+async def _all_results(pool, run_id: int) -> List[VisitResult]:
+    rows = await pool.fetch("SELECT * FROM visits WHERE run_id = $1", run_id)
+    return [VisitResult(r["page_url"], r["device"], r["template_id"], r["status"], r["http_status"], dict(r["vitals"]),
+                        list(r["a11y"]), dict(r["render_diff"]), list(r["console"]), dict(r["consent"]), r["screenshot"],
+                        list(r["timeline"]), r["error"], r["duration_ms"] or 0) for r in rows]
+
+
 def _p75(vals: List[float]) -> float:
     vals = sorted(v for v in vals if v is not None)
     return vals[min(len(vals) - 1, int(0.75 * len(vals)))] if vals else 0.0
 
 
-async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts: Dict[str, Any]) -> Dict[str, Any]:
+async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts: Dict[str, Any],
+                          control: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     targets = await plan(pool, run_id, per_template=int(opts.get("per_template", 25)),
                          mobile_share=float(site["settings"].get("mobile_share", 0.6)))
+    already = {(r["page_url"], r["device"]) for r in await pool.fetch(
+        "SELECT page_url, device FROM visits WHERE run_id = $1 AND status IN ('ok','failed')", run_id)}
+    targets = [t for t in targets if (t.url, t.device) not in already]      # resume: skip pages already visited
     rate = float(opts.get("rate_rps", site["settings"].get("rate_rps", 12)))
     await HostBudget.ensure(pool, site["primary_host"], rate_rps=rate, burst=max(2.0, rate))
     budget = HostBudget(pool, site["primary_host"], share=settings.visit_share)
@@ -128,7 +139,12 @@ async def run_visit_stage(pool, browser, run_id: int, site: Dict[str, Any], opts
         from qc6.crawl.pacing import Persona
         persona = Persona(think_median_s=0.2, think_min_s=0.05, think_max_s=0.4, scroll_pause_min_s=0.05, scroll_pause_max_s=0.1)
     results = await run_visits(browser, site, targets, budget, visitors, on_result=on_result,
-                               consent=site["settings"].get("consent", "accept"), persona=persona, on_step=on_step)
+                               consent=site["settings"].get("consent", "accept"), persona=persona, on_step=on_step,
+                               stop=(control or {}).get("stop"))
+    if control is not None and control.get("pause"):
+        return {"paused": True}
+    if already:                                          # resumed: judge templates on every visit of this run
+        results = await _all_results(pool, run_id)
     f = findings_from(results, site["primary_host"])
     tpl_rows = await pool.fetch("SELECT id, name, page_count FROM templates WHERE site_id = $1 AND id = ANY($2::bigint[])",
                                 site["id"], [t for t in {r.template_id for r in results} if t is not None])

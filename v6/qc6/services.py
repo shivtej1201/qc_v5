@@ -55,9 +55,12 @@ async def start_run(pool, site_id: int, kind: str, options: Optional[Dict[str, A
                     actor_id: Optional[int] = None) -> int:
     if kind not in ("coverage", "visit", "journey", "full"):
         raise NotAllowed("kind must be coverage, visit, journey or full")
-    busy = await pool.fetchval("SELECT id FROM runs WHERE site_id = $1 AND status IN ('queued','running','pausing')", site_id)
+    busy = await pool.fetchrow("SELECT id, status FROM runs WHERE site_id = $1 AND status IN ('queued','running','pausing','paused')",
+                               site_id)
     if busy:
-        raise NotAllowed(f"A check of this site is already {'running' if busy else 'queued'} (run {busy}). "
+        if busy["status"] == "paused":
+            raise NotAllowed(f"Check {busy['id']} of this site is paused. Resume it or cancel it first.")
+        raise NotAllowed(f"A check of this site is already {busy['status']} (run {busy['id']}). "
                          "Only one check per site runs at a time, to stay within the site's speed limit.")
     rid = await pool.fetchval("INSERT INTO runs (site_id, kind, options, created_by) VALUES ($1,$2,$3,$4) RETURNING id",
                               site_id, kind, options or {}, actor_id)

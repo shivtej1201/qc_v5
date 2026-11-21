@@ -82,7 +82,8 @@ def map_issue(r: sqlite3.Row, template_id: Optional[int], host: str) -> Optional
     return Item("PAGE_CHECK", page, "coverage", template_id, code, {"value": human(code).lower(), "subject": action}, ev)
 
 
-async def run_coverage(pool, run_id: int, site: Dict[str, Any], urls: List[str], opts: Dict[str, Any]) -> Dict[str, Any]:
+async def run_coverage(pool, run_id: int, site: Dict[str, Any], urls: List[str], opts: Dict[str, Any],
+                       control: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     run_dir = os.path.join(settings.data_dir, "runs", str(run_id))
     os.makedirs(run_dir, exist_ok=True)
     db_path = os.path.join(run_dir, "coverage.db")
@@ -98,7 +99,14 @@ async def run_coverage(pool, run_id: int, site: Dict[str, Any], urls: List[str],
         audit_seo=True)
     eng.extra_headers = {"User-Agent": f"{BROWSER_UA} {settings.ua_suffix}", settings.access_header: site["access_token"]}
     entries = [{"url": u, "source_sitemap": "", "source_sitemap_number": 1} for u in urls]
-    eng.initialize_inventory(entries)
+    eng.initialize_inventory(entries)                 # idempotent: on resume, finished pages stay finished
+    fp_path = os.path.join(run_dir, "fingerprints.json")
+    if os.path.exists(fp_path):                       # layout fingerprints of pages parsed before a pause
+        import json as _json
+        with open(fp_path, encoding="utf-8") as f:
+            eng.fingerprints.update({k: int(v) for k, v in _json.load(f).items()})
+    if control is not None:
+        control["engine"] = eng
 
     async def progress_loop():
         while True:
@@ -121,9 +129,20 @@ async def run_coverage(pool, run_id: int, site: Dict[str, Any], urls: List[str],
     finally:
         ticker.cancel()
         eng.close()
+        if control is not None:
+            control["engine"] = None
+    if eng._stop_requested:                           # paused: keep the checkpoint, build nothing yet
+        import json as _json
+        with open(fp_path, "w", encoding="utf-8") as f:
+            _json.dump({k: str(v) for k, v in eng.fingerprints.items()}, f)
+        return {"paused": True, "pages_done": int(stats.get("source_pages_processed") or 0)}
     pkg = await asyncio.to_thread(build_on_page_csv_package, db_path, job, os.path.join(run_dir, "reports"),
                                   package_name="QC_V6_COVERAGE", project_id=host)
-    return await import_coverage(pool, run_id, site, db_path, job, eng.fingerprints, stats, pkg)
+    from qc6 import facts
+    fact_counts = await asyncio.to_thread(facts.export, db_path, job, run_id)
+    out = await import_coverage(pool, run_id, site, db_path, job, eng.fingerprints, stats, pkg)
+    out["facts"] = fact_counts
+    return out
 
 
 async def import_coverage(pool, run_id: int, site: Dict[str, Any], db_path: str, job: str,

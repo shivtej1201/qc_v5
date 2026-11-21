@@ -84,6 +84,29 @@ def is_primary(host: str, primary: str) -> bool:
     return host == primary or host == base or host.endswith("." + base)
 
 
+def make_route_guard(site: Dict[str, Any], budget: Optional[HostBudget]):
+    """Playwright route handler shared by visits and journeys: only http(s)/data/blob; no private, loopback or
+    metadata addresses (same SSRF guard as the crawler, checked for every request, including redirects the page
+    triggers); every request to the site's own hosts takes a token from the shared per-host budget."""
+    from qcv5.crawler.url_normalizer import URLNormalizer
+
+    async def guard(route):
+        req = route.request
+        u = urllib.parse.urlsplit(req.url)
+        if u.scheme not in ("http", "https", "data", "blob"):
+            return await route.abort()
+        if u.scheme in ("http", "https"):
+            if not settings.allow_private_targets and not URLNormalizer.is_safe_url(req.url):
+                return await route.abort("blockedbyclient")
+            if budget is not None and is_primary(u.hostname or "", site["primary_host"]):
+                try:
+                    await budget.take()
+                except Paused:
+                    return await route.abort("blockedbyclient")
+        await route.continue_()
+    return guard
+
+
 class Visitor:
     """One simulated person. Not thread-safe; one per asyncio task."""
 
@@ -107,25 +130,12 @@ class Visitor:
             extra_http_headers={settings.access_header: self.site["access_token"]}, accept_downloads=False,
             java_script_enabled=True, service_workers="block")
         await self.ctx.add_init_script(VITALS_HOOK)
+        self._guard = make_route_guard(self.site, self.budget)
         await self.ctx.route("**/*", self._route)
         self.pages_in_ctx = 0
 
     async def _route(self, route):
-        req = route.request
-        u = urllib.parse.urlsplit(req.url)
-        if u.scheme not in ("http", "https", "data", "blob"):
-            return await route.abort()
-        if u.scheme in ("http", "https"):
-            if not settings.allow_private_targets:
-                from qcv5.crawler.url_normalizer import URLNormalizer
-                if not URLNormalizer.is_safe_url(req.url):
-                    return await route.abort("blockedbyclient")
-            if self.budget is not None and is_primary(u.hostname or "", self.site["primary_host"]):
-                try:
-                    await self.budget.take()
-                except Paused:
-                    return await route.abort("blockedbyclient")
-        await route.continue_()
+        await self._guard(route)
 
     async def close(self):
         if self.ctx is not None:
@@ -272,7 +282,8 @@ async def default_user_agent(browser) -> str:
 
 async def run_visits(browser, site: Dict[str, Any], targets: List[VisitTarget], budget: Optional[HostBudget],
                      visitors: int, on_result=None, seed: int = 7, consent: str = "accept",
-                     persona: Optional[Persona] = None, on_step=None) -> List[VisitResult]:
+                     persona: Optional[Persona] = None, on_step=None,
+                     stop: Optional[asyncio.Event] = None) -> List[VisitResult]:
     """Run targets with `visitors` people in parallel; each person takes pages one at a time."""
     visitors = max(1, min(visitors, settings.visitors_max))
     q: asyncio.Queue = asyncio.Queue()
@@ -280,7 +291,7 @@ async def run_visits(browser, site: Dict[str, Any], targets: List[VisitTarget], 
         q.put_nowait(t)
     ua = await default_user_agent(browser)
     results: List[VisitResult] = []
-    stop = asyncio.Event()
+    stop = stop or asyncio.Event()                     # set by a challenge, or by Pause (visitors finish their page)
 
     async def person(i: int):
         per_device: Dict[str, Visitor] = {}
@@ -305,7 +316,9 @@ async def run_visits(browser, site: Dict[str, Any], targets: List[VisitTarget], 
                 await v.close()
 
     await asyncio.gather(*(person(i) for i in range(visitors)))
+    challenged = any(r.status == "challenged" for r in results)
     while not q.empty():
         t = q.get_nowait()
-        results.append(VisitResult(t.url, t.device, t.template_id, status="skipped", error="host challenged; visits stopped"))
+        if challenged:
+            results.append(VisitResult(t.url, t.device, t.template_id, status="skipped", error="host challenged; visits stopped"))
     return results

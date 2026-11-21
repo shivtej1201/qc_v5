@@ -39,6 +39,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="QC V6", version="6.0.0a1", lifespan=lifespan)
 
 
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; "
+       "font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+       "base-uri 'none'; object-src 'none'; form-action 'self'")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("Content-Security-Policy", CSP)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path.startswith("/api/"):
+        resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
+
+
 def problem(status: int, title: str, detail: str = "") -> HTTPException:
     return HTTPException(status, {"title": title, "detail": detail})
 
@@ -312,16 +330,32 @@ async def run(run_id: int, me=Depends(current_member)):
     return {"run": dict(r), "recent_visits": [dict(v) for v in visits], "found": [dict(x) for x in found]}
 
 
-@app.post("/api/v2/runs/{run_id}/stop")
-async def stop_run(run_id: int, me=Depends(current_member)):
+async def _run_transition(run_id: int, me, src: tuple, dst: str, title: str, detail: str):
     can_edit(me)
     pool = await get_pool()
-    n = await pool.execute("UPDATE runs r SET status = 'cancelled', finished_at = now() FROM sites s WHERE r.id = $1 "
-                           "AND s.id = r.site_id AND s.workspace_id = $2 AND r.status = 'queued'", run_id, me["workspace_id"])
-    if n.endswith("0"):
-        raise problem(409, "Only queued checks can be cancelled in this release",
-                      "Running checks finish their current stage; pause is planned for phase 1.")
-    return {"status": "cancelled"}
+    row = await pool.fetchrow("UPDATE runs r SET status = $3, finished_at = CASE WHEN $3 = 'cancelled' THEN now() ELSE r.finished_at END "
+                              "FROM sites s WHERE r.id = $1 AND s.id = r.site_id AND s.workspace_id = $2 AND r.status = ANY($4::text[]) "
+                              "RETURNING r.id, r.site_id", run_id, me["workspace_id"], dst, list(src))
+    if row is None:
+        raise problem(409, title, detail)
+    await services.log(pool, me["workspace_id"], me["id"], f"run.{dst}", f"run:{run_id}", {})
+    return {"status": dst}
+
+
+@app.post("/api/v2/runs/{run_id}/pause")
+async def pause_run(run_id: int, me=Depends(current_member)):
+    return await _run_transition(run_id, me, ("running",), "pausing", "Only a running check can be paused", "")
+
+
+@app.post("/api/v2/runs/{run_id}/resume")
+async def resume_run(run_id: int, me=Depends(current_member)):
+    return await _run_transition(run_id, me, ("paused",), "queued", "Only a paused check can be resumed", "")
+
+
+@app.post("/api/v2/runs/{run_id}/stop")
+async def stop_run(run_id: int, me=Depends(current_member)):
+    return await _run_transition(run_id, me, ("queued", "paused"), "cancelled", "This check can't be cancelled now",
+                                 "Pause it first; a paused or queued check can be cancelled.")
 
 
 @app.get("/api/v2/stream")
@@ -405,6 +439,46 @@ async def pages(site_id: int, q: str = "", limit: int = Query(50, le=500), me=De
         ON t.id = p.template_id WHERE p.run_id = $1 AND ($2 = '' OR p.url ILIKE '%' || $2 || '%') ORDER BY p.url LIMIT $3""",
                             rid, q, limit)
     return {"pages": [dict(r) for r in rows]}
+
+
+@app.get("/api/v2/runs/{run_id}/facts/{dataset}")
+async def facts_query(run_id: int, dataset: str, filter: str = "", q: str = Query("", max_length=300), page_url: str = "",
+                      sort: str = "page", desc: bool = False, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
+                      me=Depends(current_member)):
+    """Every link / image relationship of a run (Parquet + DuckDB): filter, search, sort, page."""
+    pool = await get_pool()
+    ok = await pool.fetchval("SELECT 1 FROM runs r JOIN sites s ON s.id = r.site_id WHERE r.id = $1 AND s.workspace_id = $2",
+                             run_id, me["workspace_id"])
+    if not ok:
+        raise problem(404, "Run not found")
+    from qc6 import facts
+    try:
+        return await asyncio.to_thread(facts.query, run_id, dataset, filter, q, page_url, sort, desc, offset, limit)
+    except FileNotFoundError:
+        raise problem(404, "No link data for this check", "Link and image data is kept for checks that crawled every page.")
+    except ValueError as e:
+        raise problem(400, "Check the filter", str(e))
+
+
+@app.get("/api/v2/runs/{run_id}/export/{dataset}.csv")
+async def facts_csv(run_id: int, dataset: str, filter: str = "", me=Depends(current_member)):
+    pool = await get_pool()
+    ok = await pool.fetchval("SELECT 1 FROM runs r JOIN sites s ON s.id = r.site_id WHERE r.id = $1 AND s.workspace_id = $2",
+                             run_id, me["workspace_id"])
+    if not ok or dataset not in ("links", "images"):
+        raise problem(404, "Not found")
+    from qc6 import facts
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+    try:
+        await asyncio.to_thread(facts.export_csv, run_id, dataset, tmp, filter)
+    except Exception:
+        os.unlink(tmp)
+        raise problem(404, "No link data for this check")
+    from starlette.background import BackgroundTask
+    return FileResponse(tmp, media_type="text/csv", filename=f"run{run_id}_{dataset}{'_' + filter if filter else ''}.csv",
+                        background=BackgroundTask(os.unlink, tmp))
 
 
 # ------------------------------------------------------------------ journeys

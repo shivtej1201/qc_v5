@@ -121,3 +121,18 @@ def test_workspace_isolation_and_runs(world):
     assert c.post(f"/api/v2/runs/{r.json()['run_id']}/stop", headers=H).json()["status"] == "cancelled"
     run = c.get(f"/api/v2/runs/{world['run']}", headers=H).json()
     assert run["run"]["status"] == "completed" and run["found"]
+
+
+def test_security_headers(world):
+    r = world["c"].get("/api/v2/me", headers=H)
+    assert r.headers["x-content-type-options"] == "nosniff" and "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_links_explorer(world):
+    c = world["c"]
+    r = c.get(f"/api/v2/runs/{world['run']}/facts/links?filter=broken&limit=50", headers=H).json()
+    assert r["total"] == 12 and all(x["url"].endswith("/gone") for x in r["rows"])    # every page links to /gone
+    assert c.get(f"/api/v2/runs/{world['run']}/facts/links?filter=bogus", headers=H).status_code == 400
+    csvr = c.get(f"/api/v2/runs/{world['run']}/export/links.csv?filter=broken", headers=H)
+    assert csvr.status_code == 200 and csvr.text.count("\n") == 13

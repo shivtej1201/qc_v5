@@ -69,3 +69,12 @@ def test_irreversible_steps_are_refused():
         J.parse("name: x\nsteps:\n  - click: \"role=button[name='Submit application']\"\n")
     with pytest.raises(J.SpecError, match="exactly one action"):
         J.parse("name: x\nsteps:\n  - click: a\n    open: /b\n")
+
+
+def test_journeys_cannot_reach_private_addresses(site, tmp_path, monkeypatch):
+    """Same SSRF guard as visits: with private targets not allowed, a journey to 127.0.0.1 is blocked."""
+    from qc6.settings import settings
+    monkeypatch.setattr(settings, "allow_private_targets", False)
+    out = _run(site, SPEC.format(device="desktop", path="/apply"), tmp_path)
+    assert out.status == "failed" and out.failed_step == 1
+    assert "ERR_BLOCKED_BY_CLIENT" in out.failure_text or "blocked" in out.failure_text.lower()
