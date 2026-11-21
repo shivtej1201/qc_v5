@@ -1,0 +1,30 @@
+{
+ "coverage": {
+  "seconds": 78.1,
+  "pages": 2000,
+  "templates": 1,
+  "visited": null,
+  "facts": {
+   "links": 73503,
+   "images": 50061
+  },
+  "trust_gate": "PASS",
+  "score": 83.9,
+  "fixes": 76,
+  "status": "completed"
+ },
+ "full": {
+  "seconds": 224.3,
+  "pages": 2000,
+  "templates": 1,
+  "visited": 25,
+  "facts": {
+   "links": 73503,
+   "images": 50061
+  },
+  "trust_gate": "PASS",
+  "score": 63.9,
+  "fixes": 0,
+  "status": "completed"
+ }
+}

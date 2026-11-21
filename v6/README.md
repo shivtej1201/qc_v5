@@ -74,17 +74,42 @@ budget on Postgres, real Chromium visits on a fixture site (finds JS-only headin
 layout shift; nothing on the clean page type; a challenge stops visits), journeys (pass, explained failure, refusal of
 irreversible steps), the full pipeline twice (no false "verified"), and the API (roles, isolation, errors).
 
+## Configuration (environment)
+
+| Variable | Purpose |
+|---|---|
+| `QC6_DATABASE_URL` | Postgres connection |
+| `QC6_DATA_DIR` | screenshots, facts (Parquet), V5 report ZIPs |
+| `QC6_AUTH` | `proxy` (behind oauth2-proxy + Keycloak/Google; `QC6_TRUSTED_PROXIES`, `QC6_AUTH_HEADER`), `oidc` (Bearer JWT: `QC6_OIDC_JWKS_URL`, `QC6_OIDC_ISSUER`, `QC6_OIDC_AUDIENCE`) or `dev` (refused when `QC6_ENV=production`) |
+| `QC6_VISITORS_PER_HOST`, `QC6_VISIT_SHARE` | real-visitor concurrency and their share of a site's speed limit |
+| `QC6_NU_URL`, `QC6_LANGUAGETOOL_URL`, `QC6_LIGHTHOUSE_CMD`, `QC6_CHROME_PATH` | optional extra checks (self-hosted Nu HTML checker, LanguageTool, local Lighthouse) |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | GA4-led sampling (site setting `ga4_property_id`) and the V5 Search Console integration |
+| `QC6_GITHUB_TOKEN`, `QC6_JIRA_TOKEN` | ticket creation (repository / Jira site set per site in Settings) |
+
+Site settings (Settings page or `PATCH /api/v2/sites/{id}`): speed limit, visitors, cookie answer, sitemap,
+`check_schedule` ("daily 06:30", "weekdays 07:15", "every 6 hours"), Slack/Teams webhooks and which events alert,
+GitHub/Jira. Journeys can carry their own `schedule:`.
+
+## Measured
+
+| Run (simulated site, 30 req/s) | Result |
+|---|---|
+| Coverage, 2,000 pages | 78 s end to end in V6 (crawl, page types, V5 report package, Parquet facts, fixes): 73,503 links, 50,061 images, trust gate PASS |
+| Full, 2,000 pages | 224 s: coverage, then 25 real-browser visits at human pace (6 visitors), then journeys |
+| V5 engine alone, 300,000 pages | 3 h 22 min end to end (V5 benchmark) |
+
 ## Status against the delivery plan (blueprint §16)
 
 | Phase | State |
 |---|---|
-| 0 Foundations | Done: schema, migrations, API, web app, compose file. Not done: Keycloak/OIDC (dev auth via `X-QC-User`), CI pipeline |
-| 1 Coverage on new storage | Partly: V5 engine runs inside V6 and feeds Postgres; link/image facts still in V5's SQLite + CSV/ZIP, Parquet/DuckDB not yet |
-| 2 Fixes and inbox | Done: fix grouping, inbox, drawer, owners, comments, lifecycle, plain-language rules |
-| 3 Real-visitor review | Done: clustering, visit plan, visitors, axe, web-vitals, render diff, screenshots, challenge handling. Not done: visual diff between runs |
-| 4 Journeys | Done: YAML, runner, filmstrip, guard. Not done: schedules, recorder, alerts |
-| 5 Integrations | V5's free integrations exposed in V6. Not done: GSC/GA4-driven sampling, Slack/Jira, Nu HTML, LanguageTool, Lighthouse |
-| 6 Hardening | Not started |
+| 0 Foundations | Done: schema + migrations, API, web app, compose file, CI workflow (GitHub Actions), sign-in (trusted proxy or OIDC bearer). Keycloak itself is deployed by you (any OIDC provider works) |
+| 1 Coverage on new storage | Done: V5 engine inside V6, state in Postgres, link/image facts in Parquet + DuckDB (explorer, CSV export), live progress over SSE, pause/resume |
+| 2 Fixes and inbox | Done |
+| 3 Real-visitor review | Done, including visual change between checks |
+| 4 Journeys | Done: YAML, runner, filmstrip, irreversible-action guard, schedules, recorder (Playwright codegen → steps), Slack/Teams alerts |
+| 5 Integrations | Done: GA4-led sampling, Nu HTML checker, LanguageTool, local Lighthouse, GitHub/Jira tickets with status sync, V5 free integrations |
+| 6 Hardening | Partly: security headers, SSRF guard on every browser request, webhook/ticket hosts allow-listed, auth tests, dependency audit in CI. Not done: an external security review, a 300K-page run inside V6, behaviour against a real Akamai/Cloudflare edge |
 
-Not verified: behaviour against a real CDN (Akamai/Cloudflare) and the 300K-page run inside V6 (the engine itself was
-measured in V5). Pausing a running check is not implemented yet (queued checks can be cancelled).
+Known limits: in a full check the real-visitor stage starts after the coverage stage (the blueprint runs them in
+parallel); visits need the page types the coverage stage produces. Live progress for a check started elsewhere
+arrives over SSE only while the page is open.

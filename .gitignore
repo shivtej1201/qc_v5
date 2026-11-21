@@ -26,3 +26,4 @@ dist/
 v6/var/
 v6/web/node_modules/
 v6/web/dist/
+v6/var-perf/
