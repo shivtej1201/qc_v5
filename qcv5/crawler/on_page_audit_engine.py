@@ -1196,7 +1196,7 @@ class OnPageAuditEngine:
         if initial_wait and self.akamai_cooldown_sec > 0:
             print(f"[COOLDOWN] Waiting {self.akamai_cooldown_sec:.0f}s for Akamai edge window reset...", flush=True)
             await asyncio.sleep(self.akamai_cooldown_sec)
-        probe_url = self.probe_url or f"https://www.{self.primary_domain}/robots.txt"
+        probe_url = self.probe_url or (f"https://{self.primary_domain}/robots.txt" if self.primary_domain.startswith("www.") else f"https://www.{self.primary_domain}/robots.txt")
         for attempt in range(1, 12):
             try:
                 self.metrics["http_requests"] += 1

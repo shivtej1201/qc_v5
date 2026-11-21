@@ -44,8 +44,8 @@ class RobotsManager:
 
             parser = urllib.robotparser.RobotFileParser()
             try:
-                browser_headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                browser_headers = {  # the same identity as every other request (the client's headers + this UA)
+                    "User-Agent": self.user_agent,
                     "Accept": "text/plain,text/html,*/*"
                 }
                 resp = await self.http_client.get(robots_url, headers=browser_headers, timeout=5.0)

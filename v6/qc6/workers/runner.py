@@ -33,18 +33,32 @@ async def discover_urls(site: Dict[str, Any], opts: Dict[str, Any]) -> List[str]
         return list(dict.fromkeys(opts["urls"]))[: int(opts.get("max_pages", 300_000))]
     from qcv5.crawler.sitemap_extractor import SitemapExtractor
     sitemaps = [x for x in (opts.get("sitemap"), (site.get("settings") or {}).get("sitemap")) if x]
+    from qc6.workers.coverage import identity_headers
+    headers = identity_headers(site)
     if not sitemaps:                     # like a crawler would: robots.txt Sitemap lines, else /sitemap.xml
         import httpx
         try:
-            async with httpx.AsyncClient(timeout=15, headers={settings.access_header: site["access_token"]}) as c:
+            async with httpx.AsyncClient(timeout=15, headers=headers) as c:
                 r = await c.get(site["base_url"] + "/robots.txt")
                 if r.status_code == 200:
                     sitemaps = [l.split(":", 1)[1].strip() for l in r.text.splitlines() if l.lower().startswith("sitemap:")]
         except httpx.HTTPError:
             pass
         sitemaps = sitemaps or [site["base_url"] + "/sitemap.xml"]
-    ex = SitemapExtractor(allow_local=settings.allow_private_targets, max_urls=int(opts.get("max_pages", 300_000)))
-    res = await ex.extract_all(sitemaps)
+    # Honest identity on every sitemap request, and no "retry in a disguised browser" when the CDN says no (blueprint §1.1)
+    ex = SitemapExtractor(allow_local=settings.allow_private_targets, max_urls=int(opts.get("max_pages", 300_000)),
+                          use_browser_fallback=False)
+    ex.client.headers.update(headers)
+    ex.robots_manager.user_agent = headers["User-Agent"]
+    try:
+        res = await ex.extract_all(sitemaps)
+    finally:
+        await ex.close()
+    if not res.get("unique_urls"):
+        if (res.get("hierarchy_summary") or {}).get("blocked_by_waf_or_403"):
+            raise RuntimeError(
+                f"{site['primary_host']} refused to show QC its sitemap (HTTP 403 from the CDN). QC doesn't try to get round a "
+                "block. Open Crawler access, copy the allow rule for the X-QC-Audit header, and ask your CDN team to add it.")
     return [u["normalized_url"] for u in res.get("unique_urls", [])][: int(opts.get("max_pages", 300_000))]
 
 

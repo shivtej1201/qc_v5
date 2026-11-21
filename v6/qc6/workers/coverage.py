@@ -82,6 +82,11 @@ def map_issue(r: sqlite3.Row, template_id: Optional[int], host: str) -> Optional
     return Item("PAGE_CHECK", page, "coverage", template_id, code, {"value": human(code).lower(), "subject": action}, ev)
 
 
+def identity_headers(site: Dict[str, Any]) -> Dict[str, str]:
+    """How QC introduces itself on every request: a real browser UA plus 'QC-Audit/6.0', and the site's access token."""
+    return {"User-Agent": f"{BROWSER_UA} {settings.ua_suffix}", settings.access_header: site["access_token"]}
+
+
 async def run_coverage(pool, run_id: int, site: Dict[str, Any], urls: List[str], opts: Dict[str, Any],
                        control: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     run_dir = os.path.join(settings.data_dir, "runs", str(run_id))
@@ -96,8 +101,8 @@ async def run_coverage(pool, run_id: int, site: Dict[str, Any], urls: List[str],
         primary_domain=host, target_rps=coverage_rate, min_rps=max(0.5, coverage_rate / 3), max_rps=coverage_rate,
         source_concurrency=int(opts.get("source_concurrency", 20)), dest_concurrency=int(opts.get("dest_concurrency", 20)),
         image_concurrency=int(opts.get("image_concurrency", 30)), audit_images=opts.get("images", True),
-        audit_seo=True)
-    eng.extra_headers = {"User-Agent": f"{BROWSER_UA} {settings.ua_suffix}", settings.access_header: site["access_token"]}
+        audit_seo=True, probe_url=f"{site['base_url'].rstrip('/')}/robots.txt")
+    eng.extra_headers = identity_headers(site)
     entries = [{"url": u, "source_sitemap": "", "source_sitemap_number": 1} for u in urls]
     eng.initialize_inventory(entries)                 # idempotent: on resume, finished pages stay finished
     fp_path = os.path.join(run_dir, "fingerprints.json")
