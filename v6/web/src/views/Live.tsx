@@ -4,6 +4,8 @@ import { go } from "../main";
 import { fadeText, useViewMotion } from "../motion";
 import { ErrorBox, Icon, Sev, ago, count, useLoad, useToast } from "../ui";
 
+const STATUS: Record<string, string> = { running: "Running", queued: "Waiting to start", pausing: "Pausing…", paused: "Paused",
+  completed: "Completed", failed: "Stopped", cancelled: "Cancelled" };
 const STEP_TEXT: Record<string, string> = {
   open: "Loading the page", settled: "Page settled", consent: "Answered the cookie banner", read: "Reading", scrolled: "Scrolling down",
   measured: "Measuring", done: "Done, moving on",
@@ -31,7 +33,7 @@ export function LiveView({ site, params }: { site: Site; params: URLSearchParams
   }, [detail.data]);
 
   useEffect(() => {
-    if (!run || !["queued", "running"].includes(run.status)) return;
+    if (!run || !["queued", "running", "pausing"].includes(run.status)) return;
     const es = new EventSource(`/api/v2/stream?run=${run.id}`);
     let lane = 0;
     const onProgress = (e: MessageEvent) => {
@@ -57,6 +59,7 @@ export function LiveView({ site, params }: { site: Site; params: URLSearchParams
     const finish = () => { es.close(); window.clearInterval(refresh); detail.reload(); runs.reload(); };
     es.addEventListener("completed", finish);
     es.addEventListener("failed", finish);
+    es.addEventListener("paused", finish);
     return () => { es.close(); window.clearInterval(refresh); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id, run?.status === "running" || run?.status === "queued"]);
@@ -72,12 +75,20 @@ export function LiveView({ site, params }: { site: Site; params: URLSearchParams
   const p = run.progress || {};
   const pagesDone = p.pages_done ?? run.summary?.pages ?? 0, pagesTotal = p.pages_total ?? run.summary?.pages ?? 0;
   const visitsDone = p.visits_done ?? run.summary?.visited ?? 0, visitsTotal = p.visits_total ?? run.summary?.visits_planned ?? 0;
-  const live = ["queued", "running"].includes(run.status);
+  const live = ["queued", "running", "pausing"].includes(run.status);
+  const control = async (what: "pause" | "resume" | "cancel") => {
+    try {
+      if (what === "pause") { await api.pauseRun(run.id); toast("Pausing. Visitors finish the page they're on; nothing already checked is lost."); }
+      if (what === "resume") { await api.resumeRun(run.id); toast("Resuming where it stopped."); }
+      if (what === "cancel") { await api.cancelRun(run.id); toast("Check cancelled."); }
+      detail.reload(); runs.reload();
+    } catch (e: any) { toast(e.detail || e.title || e.message); }
+  };
   const frac = p.stage === "visits" ? (visitsTotal ? visitsDone / visitsTotal : 0) : (pagesTotal ? pagesDone / pagesTotal : 0);
   const sentence = live
     ? (p.stage === "visits" ? `Visitors have checked ${count(visitsDone)} of ${count(visitsTotal)} sample pages in a real browser.`
       : `${count(pagesDone)} of ${count(pagesTotal)} pages checked.`)
-    : run.status === "completed" ? `Finished ${ago(run.finished_at)}. ${count(run.summary?.pages)} pages checked, ${count(run.summary?.visited)} visited in a real browser.`
+    : run.status === "paused" ? "Paused. Resume to carry on where it stopped." : run.status === "completed" ? `Finished ${ago(run.finished_at)}. ${count(run.summary?.pages)} pages checked, ${count(run.summary?.visited)} visited in a real browser.`
       : run.status === "failed" ? `This check stopped: ${run.error}` : `This check was ${run.status}.`;
 
   return (
@@ -87,12 +98,17 @@ export function LiveView({ site, params }: { site: Site; params: URLSearchParams
           <h1>{live ? `Checking ${site.primary_host}` : `Check of ${site.primary_host}`}</h1>
           <p className="lede" ref={lede} aria-live="polite">{sentence}</p>
         </div>
-        <span className={`pill ${run.status === "completed" ? "good" : run.status === "failed" ? "bad" : "warn"}`}>
-          {run.status === "running" ? "Running" : run.status[0].toUpperCase() + run.status.slice(1)}</span>
+        <div className="row">
+          {run.status === "running" && <button className="btn" onClick={() => control("pause")}><Icon name="pause" />Pause</button>}
+          {run.status === "paused" && <button className="btn primary" onClick={() => control("resume")}><Icon name="play" />Resume</button>}
+          {["paused", "queued"].includes(run.status) && <button className="btn quiet" onClick={() => control("cancel")}>Cancel</button>}
+          <span className={`pill ${run.status === "completed" ? "good" : run.status === "failed" ? "bad" : "warn"}`}>
+            {STATUS[run.status] || run.status}</span>
+        </div>
       </div>
       {live && <div className="progress-line" aria-hidden="true"><i style={{ width: `${(frac * 100).toFixed(1)}%` }} /></div>}
       <p className="faint" style={{ fontSize: 13, margin: "0 0 20px" }}>
-        Stage: {p.stage === "visits" ? "real-visitor checks" : p.stage === "coverage" ? "every page and link" : live ? "starting" : "finished"} ·
+        Stage: {run.status === "paused" ? `paused after ${(p.stages_done || []).length ? (p.stages_done || []).join(", ") : "part of the page check"}` : p.stage === "visits" ? "real-visitor checks" : p.stage === "coverage" ? "every page and link" : live ? "starting" : "finished"} ·
         Each visitor reads one page at a time and pauses like a person.
       </p>
       <div className="grid g-main">

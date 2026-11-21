@@ -30,6 +30,16 @@ export function JourneysView({ site, params }: { site: Site; params: URLSearchPa
   const [editing, setEditing] = useState(false);
   const [yaml, setYaml] = useState(EXAMPLE);
   const [err, setErr] = useState<string | null>(null);
+  const [rec, setRec] = useState("");
+  const [recName, setRecName] = useState("");
+  const convert = async () => {
+    setErr(null);
+    try {
+      const out = await api.convertRecording(site.id, rec, recName || "Recorded journey", "desktop");
+      setYaml(out.yaml);
+      toast(out.skipped.length ? `Converted. ${out.skipped.length} line(s) weren't understood and were left out.` : "Converted. Check the steps, then save.");
+    } catch (e: any) { setErr(e.detail || e.message); }
+  };
   const toast = useToast();
 
   const save = async () => {
@@ -54,6 +64,16 @@ export function JourneysView({ site, params }: { site: Site; params: URLSearchPa
       {editing && (
         <div className="panel" data-reveal style={{ marginBottom: 18 }}>
           <div className="panel-head"><h2>New journey</h2><span className="faint" style={{ fontSize: 13 }}>Buttons like Submit or Pay are never pressed; use stop_before.</span></div>
+          <details style={{ marginBottom: 12 }}>
+            <summary style={{ cursor: "pointer" }}>Record it instead of writing it</summary>
+            <p className="faint" style={{ fontSize: 13 }}>Run <span className="mono">npx playwright codegen --target python {site.base_url}</span> on your computer,
+              click through the journey, then paste the generated code here.</p>
+            <label className="sr-only" htmlFor="rec-name">Journey name</label>
+            <input id="rec-name" className="input" placeholder="Journey name" value={recName} onChange={(e) => setRecName(e.target.value)} style={{ marginBottom: 8, width: "100%" }} />
+            <label className="sr-only" htmlFor="rec">Recorded code</label>
+            <textarea id="rec" className="input" style={{ minHeight: 120 }} placeholder="page.goto(...)" value={rec} onChange={(e) => setRec(e.target.value)} />
+            <div className="row" style={{ marginTop: 8 }}><button className="btn" type="button" disabled={rec.length < 10} onClick={convert}>Turn into steps</button></div>
+          </details>
           <label className="sr-only" htmlFor="yaml">Journey steps</label>
           <textarea id="yaml" className="input" value={yaml} onChange={(e) => setYaml(e.target.value)} spellCheck={false} />
           {err && <div style={{ marginTop: 10 }}><ErrorBox text={err} /></div>}

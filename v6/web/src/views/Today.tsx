@@ -19,7 +19,8 @@ export function TodayView({ site }: { site: Site; params: URLSearchParams }) {
   if (t.error) return <ErrorBox text={t.error} onRetry={t.reload} />;
   if (!t.data) return <p className="faint">Loading…</p>;
   const d = t.data;
-  const running = d.last_run && ["queued", "running"].includes(d.last_run.status);
+  const running = d.last_run && ["queued", "running", "pausing", "paused"].includes(d.last_run.status);
+  const changedTpl: any[] = d.last_run?.summary?.templates_changed || [];
 
   const act = async (c: TodayCard) => {
     if (c.kind === "journey") go("journeys", { run: c.journey_run_id ?? "" });
@@ -46,13 +47,21 @@ export function TodayView({ site }: { site: Site; params: URLSearchParams }) {
           <h1>{d.greeting}</h1>
           <p className="lede">{d.lede}</p>
         </div>
-        {running ? <button className="btn primary" onClick={() => go("live", { run: d.last_run!.id })}><Icon name="live" />Watch the check</button>
+        {running ? <button className="btn primary" onClick={() => go("live", { run: d.last_run!.id })}><Icon name="live" />{d.last_run!.status === "paused" ? "Resume the check" : "Watch the check"}</button>
           : <button className="btn primary" disabled={starting} onClick={start}><Icon name="play" />Check the site now</button>}
       </div>
       <div className="grid g-main">
         <div className="panel" data-reveal>
           <p className="section-label">Needs you</p>
-          {d.cards.length === 0 && <p className="empty">Nothing needs you right now. We'll keep checking.</p>}
+          {d.cards.length === 0 && changedTpl.length === 0 && <p className="empty">Nothing needs you right now. We'll keep checking.</p>}
+          {changedTpl.slice(0, 2).map((t) => (
+            <div className="need" key={`v${t.template_id}`}>
+              <div className="icon"><Icon name="page" /></div>
+              <div><h3>{t.template} look different since the last check</h3>
+                <p>{Math.round(t.changed * 100)}% of the page changed on the {t.pages_compared} pages compared. If that wasn't a planned release, have a look.</p></div>
+              <button className="btn" onClick={() => go("fixes")}>See fixes</button>
+            </div>
+          ))}
           {d.cards.map((c, i) => {
             const [icon, alert] = CARD_ICON[c.kind] || ["fix", false];
             return (

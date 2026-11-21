@@ -127,6 +127,12 @@ function FixDrawer({ id, members, onChanged }: { id: number; members: Member[]; 
               {["open", "in_progress"].includes(f.status) && <button className="btn primary" disabled={busy} onClick={() => change({ status: "fixed_pending_check" }, "Marked fixed. The next check will confirm it.")}>I've fixed it</button>}
               {f.status !== "wont_fix" && f.status !== "verified" && <button className="btn quiet" disabled={busy} onClick={() => change({ status: "wont_fix" }, "Marked as won't fix.")}>Won't fix</button>}
               {(f.status === "wont_fix" || f.status === "verified") && <button className="btn" disabled={busy} onClick={() => change({ status: "open" }, "Reopened.")}>Reopen</button>}
+              {f.ticket_url ? <a className="btn quiet" href={f.ticket_url} target="_blank" rel="noopener noreferrer">Open ticket</a>
+                : <button className="btn quiet" disabled={busy} onClick={async () => {
+                    setBusy(true);
+                    try { const t = await api.createTicket(id); toast(`Ticket ${t.key} created.`); d.reload(); onChanged(); }
+                    catch (e: any) { toast(e.detail || e.message); } finally { setBusy(false); }
+                  }}>Create ticket</button>}
             </div>
             {d.data.examples.length > 0 && (
               <>

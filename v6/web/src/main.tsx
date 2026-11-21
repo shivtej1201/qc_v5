@@ -11,6 +11,8 @@ import { JourneysView } from "./views/Journeys";
 import { IntegrationsView } from "./views/Integrations";
 import { AccessView } from "./views/Access";
 import { SetupView } from "./views/Setup";
+import { LinksView } from "./views/Links";
+import { SettingsView } from "./views/Settings";
 
 export type Route = { view: string; params: URLSearchParams };
 function parseHash(): Route {
@@ -25,7 +27,8 @@ export function go(view: string, params: Record<string, string | number> = {}) {
 
 const NAV: [string, string, string][] = [
   ["today", "today", "Today"], ["live", "live", "Live run"], ["fixes", "fix", "Fixes"], ["page", "page", "Page"],
-  ["journeys", "journey", "Journeys"], ["integrations", "plug", "Integrations"], ["access", "shield", "Crawler access"],
+  ["links", "layers", "Links & images"], ["journeys", "journey", "Journeys"], ["integrations", "plug", "Integrations"],
+  ["access", "shield", "Crawler access"], ["settings", "settings", "Settings"],
 ];
 
 function App() {
@@ -64,6 +67,7 @@ function App() {
     body = {
       today: <TodayView {...p} />, live: <LiveView {...p} />, fixes: <FixesView {...p} />, page: <PageView {...p} />,
       journeys: <JourneysView {...p} />, integrations: <IntegrationsView {...p} />, access: <AccessView {...p} />,
+      links: <LinksView {...p} />, settings: <SettingsView {...p} />,
     }[route.view] || <TodayView {...p} />;
   }
 

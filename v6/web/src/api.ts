@@ -69,4 +69,18 @@ export const api = {
   integrations: () => req<{ integrations: any[]; not_included: { name: string; reason: string }[]; attribution: string }>("GET", "/api/v2/integrations"),
   runIntegration: (id: string, url: string, params: Record<string, unknown> = {}) => req<any>("POST", `/api/v2/integrations/${id}/run`, { url, params }),
   objectUrl: (name: string) => `/api/v2/objects/${encodeURIComponent(name)}`,
+  pauseRun: (id: number) => req<{ status: string }>("POST", `/api/v2/runs/${id}/pause`),
+  resumeRun: (id: number) => req<{ status: string }>("POST", `/api/v2/runs/${id}/resume`),
+  cancelRun: (id: number) => req<{ status: string }>("POST", `/api/v2/runs/${id}/stop`),
+  facts: (runId: number, dataset: string, params: Record<string, string | number>) =>
+    req<{ total: number; rows: any[]; summary: { n_rows?: number; rows?: number; n_unique?: number; n_broken?: number; n_redirects?: number } }>(
+      "GET", `/api/v2/runs/${runId}/facts/${dataset}?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`),
+  factsCsvUrl: (runId: number, dataset: string, filter: string) => `/api/v2/runs/${runId}/export/${dataset}.csv?${new URLSearchParams({ filter })}`,
+  patchSite: (sid: number, b: Record<string, unknown>) => req<Site>("PATCH", `/api/v2/sites/${sid}`, b),
+  site: (sid: number) => req<Site>("GET", `/api/v2/sites/${sid}`),
+  testAlert: (sid: number) => req<{ sent: { channel: string; ok: boolean; status?: number; error?: string }[] }>("POST", `/api/v2/sites/${sid}/alerts/test`),
+  convertRecording: (sid: number, code: string, name: string, device: string) =>
+    req<{ yaml: string; skipped: string[]; origin: string }>("POST", `/api/v2/sites/${sid}/journeys/convert`, { code, name, device }),
+  createTicket: (fixId: number) => req<{ url: string; key: string }>("POST", `/api/v2/fixes/${fixId}/ticket`),
+  syncTickets: (sid: number) => req<{ moved_to_waiting: number }>("POST", `/api/v2/sites/${sid}/tickets/sync`),
 };

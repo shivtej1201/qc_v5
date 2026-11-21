@@ -98,7 +98,7 @@ async def language_check(text: str, language: str) -> Dict[str, Any]:
 
 async def lighthouse(url: str, device: str = "mobile") -> Dict[str, Any]:
     cmd = os.environ["QC6_LIGHTHOUSE_CMD"]
-    chrome = os.environ.get("QC6_CHROME_PATH") or "/opt/pw-browsers/chromium"
+    chrome = os.environ.get("QC6_CHROME_PATH") or await _playwright_chromium()
     fd, out = tempfile.mkstemp(suffix=".json")
     os.close(fd)
     try:
@@ -121,6 +121,16 @@ async def lighthouse(url: str, device: str = "mobile") -> Dict[str, Any]:
     return {"scores": cats, "lcp_ms": (audits.get("largest-contentful-paint") or {}).get("numericValue"),
             "opportunities": [f"{t} (~{round(ms)} ms)" for t, ms in opps[:3] if ms > 0], "a11y_failed": failed_a11y,
             "version": d.get("lighthouseVersion")}
+
+
+async def _playwright_chromium() -> str:
+    """Playwright's own Chromium, so Lighthouse needs no separate browser install."""
+    from playwright.async_api import async_playwright
+    p = await async_playwright().start()
+    try:
+        return p.chromium.executable_path
+    finally:
+        await p.stop()
 
 
 async def run_extras(pool, run_id: int, site: Dict[str, Any], max_templates: int = 10) -> Dict[str, Any]:

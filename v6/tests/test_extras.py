@@ -12,7 +12,7 @@ from qc6 import ga4, services  # noqa: E402
 from qc6.workers import extras  # noqa: E402
 from qc6.workers.visit_stage import plan  # noqa: E402
 
-LH = "/tmp/claude-0/lh/node_modules/.bin/lighthouse"
+LH = os.environ.get("QC6_TEST_LIGHTHOUSE", "/tmp/claude-0/lh/node_modules/.bin/lighthouse")
 
 
 @pytest.fixture(scope="module")

@@ -1,0 +1,48 @@
+name: QC V6
+on:
+  push:
+    paths: ["v6/**", "qcv5/**", ".github/workflows/v6.yml"]
+  pull_request:
+    paths: ["v6/**", "qcv5/**", ".github/workflows/v6.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: qc6, POSTGRES_DB: qc6_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20
+    env:
+      QC6_TEST_DATABASE_URL: postgresql://postgres:qc6@127.0.0.1:5432/qc6_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: v6/web/package-lock.json }
+      - name: Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install fastapi uvicorn asyncpg httpx playwright pyyaml duckdb pyarrow pillow cryptography pytest pip-audit
+          python -m playwright install --with-deps chromium
+      - name: Lighthouse (optional extra check, exercised by the tests)
+        run: |
+          mkdir -p "$RUNNER_TEMP/lh" && cd "$RUNNER_TEMP/lh" && npm init -y >/dev/null && npm i lighthouse@12.2.1
+          echo "QC6_TEST_LIGHTHOUSE=$RUNNER_TEMP/lh/node_modules/.bin/lighthouse" >> "$GITHUB_ENV"
+          echo "QC6_CHROME_PATH=$(python -c 'from playwright.sync_api import sync_playwright as s; p=s().start(); print(p.chromium.executable_path); p.stop()')" >> "$GITHUB_ENV"
+      - name: Web app (type-check + build)
+        working-directory: v6/web
+        run: npm ci && npm run build
+      - name: V6 tests
+        working-directory: v6
+        run: python -m pytest -q
+      - name: V5 engine tests used by V6
+        run: python -m pytest -q tests/test_on_page_audit.py tests/test_on_page_url_image_audit.py tests/test_http_pool.py tests/test_integrations.py
+      - name: Dependency audit
+        run: |
+          pip-audit -r requirements.txt || true
+          cd v6/web && npm audit --omit=dev --audit-level=high

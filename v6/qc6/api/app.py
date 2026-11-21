@@ -68,12 +68,22 @@ async def _http_exc(request: Request, exc: HTTPException):
 
 
 # ------------------------------------------------------------------ identity
-async def current_member(x_qc_user: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+async def current_member(request: Request) -> Dict[str, Any]:
+    from qc6 import auth
+    try:
+        mode, email = await auth.caller_email(dict(request.headers), request.client.host if request.client else None,
+                                              dict(request.query_params))
+    except auth.AuthError as e:
+        raise problem(e.status, e.title, e.detail)
     pool = await get_pool()
-    if x_qc_user:
-        m = await pool.fetchrow("SELECT * FROM members WHERE email = $1 ORDER BY id LIMIT 1", x_qc_user.lower())
-    else:
+    if email:
+        m = await pool.fetchrow("SELECT * FROM members WHERE lower(email) = lower($1) ORDER BY id LIMIT 1", email)
+        if m is None:
+            raise problem(403, "You're signed in but not a member here", f"Ask a workspace owner to add {email}.")
+    elif mode == "dev":
         m = await pool.fetchrow("SELECT * FROM members WHERE role = 'owner' ORDER BY id LIMIT 1")
+    else:
+        m = None
     if m is None:
         raise problem(401, "Sign in first", "No workspace member matches this session.")
     return dict(m)
